@@ -110,6 +110,8 @@ type x11Window struct {
 	clipboard struct {
 		content []byte
 	}
+	xdndAtoms xdndAtoms
+	xdnd      xdndState
 	cursor    pointer.Cursor
 	config    Config
 	closing   *ClosingEvent
@@ -738,6 +740,10 @@ func (h *x11EventHandler) handleEvents() bool {
 			// redraw will be done by a later expose event
 		case C.SelectionNotify:
 			cevt := (*C.XSelectionEvent)(unsafe.Pointer(xev))
+			if cevt.selection == w.xdndAtoms.selection {
+				w.handleXdndSelection(cevt)
+				break
+			}
 			prop := w.atoms.clipboardContent
 			if cevt.property != prop {
 				break
@@ -809,6 +815,9 @@ func (h *x11EventHandler) handleEvents() bool {
 			}
 		case C.ClientMessage: // extensions
 			cevt := (*C.XClientMessageEvent)(unsafe.Pointer(xev))
+			if w.handleXdndMessage(cevt) {
+				break
+			}
 			switch *(*C.long)(unsafe.Pointer(&cevt.data)) {
 			case C.long(w.atoms.evDelWindow):
 				if w.closing != nil {
@@ -935,6 +944,7 @@ func newX11Window(gioWin *callbacks, options []Option) error {
 
 	// extensions
 	C.XSetWMProtocols(dpy, win, &w.atoms.evDelWindow, 1)
+	w.initXdnd()
 
 	// IBus IME
 	if strings.Contains(os.Getenv("XMODIFIERS"), "@im=ibus") {

@@ -15,7 +15,7 @@ import (
 // doesn't offer it still produces DropEnter, DropMove and DropLeave, but
 // the platform is told the window won't accept it.
 //
-// DropEvents are supported on Wayland.
+// DropEvents are supported on Wayland and X11.
 type DropEvent struct {
 	Kind DropKind
 	// Position is the drag position in pixels, in the coordinate
