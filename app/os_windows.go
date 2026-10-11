@@ -54,6 +54,8 @@ type window struct {
 	// frameDims stores the last seen window frame width and height.
 	frameDims image.Point
 	loop      *eventLoop
+
+	dropTarget *dropTarget
 }
 
 const _WM_WAKEUP = windows.WM_USER + iota
@@ -213,6 +215,10 @@ func (w *window) init() error {
 		return err
 	}
 	w.hwnd = hwnd
+	if err := w.registerDropTarget(); err != nil {
+		windows.DestroyWindow(hwnd)
+		return err
+	}
 	return nil
 }
 
@@ -363,6 +369,7 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 	case windows.WM_POINTERHWHEEL:
 		w.scrollEvent(wParam, lParam, true, getModifiers())
 	case windows.WM_DESTROY:
+		windows.RevokeDragDrop(w.hwnd)
 		w.ProcessEvent(Win32ViewEvent{})
 		w.ProcessEvent(DestroyEvent{})
 		w.w = nil

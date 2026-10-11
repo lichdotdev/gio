@@ -63,6 +63,22 @@ type Msg struct {
 	LPrivate uint32
 }
 
+// FormatEtc is the FORMATETC structure.
+type FormatEtc struct {
+	CfFormat uint16
+	Ptd      uintptr
+	DwAspect uint32
+	Lindex   int32
+	Tymed    uint32
+}
+
+// StgMedium is the STGMEDIUM structure.
+type StgMedium struct {
+	Tymed          uint32
+	Handle         syscall.Handle
+	PUnkForRelease uintptr
+}
+
 type Point struct {
 	X, Y int32
 }
@@ -419,6 +435,7 @@ const (
 	GHND = 0x0042
 
 	CF_UNICODETEXT = 13
+	CF_HDROP       = 15
 	IMAGE_BITMAP   = 0
 	IMAGE_ICON     = 1
 	IMAGE_CURSOR   = 2
@@ -517,6 +534,15 @@ var (
 
 	dwmapi                        = syscall.NewLazySystemDLL("dwmapi")
 	_DwmExtendFrameIntoClientArea = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+
+	ole32             = syscall.NewLazySystemDLL("ole32")
+	_OleInitialize    = ole32.NewProc("OleInitialize")
+	_RegisterDragDrop = ole32.NewProc("RegisterDragDrop")
+	_ReleaseStgMedium = ole32.NewProc("ReleaseStgMedium")
+	_RevokeDragDrop   = ole32.NewProc("RevokeDragDrop")
+
+	shell32         = syscall.NewLazySystemDLL("shell32")
+	_DragQueryFileW = shell32.NewProc("DragQueryFileW")
 )
 
 func AdjustWindowRectEx(r *Rect, dwStyle uint32, bMenu int, dwExStyle uint32) {
@@ -1026,4 +1052,53 @@ func (p *WindowPlacement) Set(Left, Top, Right, Bottom int) {
 	p.rcNormalPosition.Top = int32(Top)
 	p.rcNormalPosition.Right = int32(Right)
 	p.rcNormalPosition.Bottom = int32(Bottom)
+}
+
+const (
+	DROPEFFECT_NONE = 0
+	DROPEFFECT_COPY = 1
+
+	DVASPECT_CONTENT = 1
+	TYMED_HGLOBAL    = 1
+)
+
+func OleInitialize() error {
+	r, _, _ := _OleInitialize.Call(0)
+	// S_FALSE reports that OLE was already initialized on the thread.
+	if r != 0 && r != 1 {
+		return fmt.Errorf("OleInitialize failed: %#x", r)
+	}
+	return nil
+}
+
+// RegisterDragDrop registers target, a pointer to an IDropTarget
+// implementation, for hwnd.
+func RegisterDragDrop(hwnd syscall.Handle, target unsafe.Pointer) error {
+	r, _, _ := _RegisterDragDrop.Call(uintptr(hwnd), uintptr(target))
+	if r != 0 {
+		return fmt.Errorf("RegisterDragDrop failed: %#x", r)
+	}
+	return nil
+}
+
+func RevokeDragDrop(hwnd syscall.Handle) {
+	_RevokeDragDrop.Call(uintptr(hwnd))
+}
+
+func ReleaseStgMedium(m *StgMedium) {
+	_ReleaseStgMedium.Call(uintptr(unsafe.Pointer(m)))
+}
+
+// DragQueryFiles returns the paths of the files in hdrop.
+func DragQueryFiles(hdrop syscall.Handle) []string {
+	const queryCount = 0xFFFFFFFF
+	n, _, _ := _DragQueryFileW.Call(uintptr(hdrop), queryCount, 0, 0)
+	paths := make([]string, 0, n)
+	for i := uintptr(0); i < n; i++ {
+		l, _, _ := _DragQueryFileW.Call(uintptr(hdrop), i, 0, 0)
+		buf := make([]uint16, l+1)
+		_DragQueryFileW.Call(uintptr(hdrop), i, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		paths = append(paths, syscall.UTF16ToString(buf))
+	}
+	return paths
 }
