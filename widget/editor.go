@@ -516,7 +516,10 @@ func (e *Editor) command(gtx layout.Context, k key.Event) (EditorEvent, bool) {
 			e.text.MoveWord(1*direction, selAct)
 		}
 	}
-	if k.Modifiers.Contain(key.ModShortcut) {
+	// Off macOS ModShortcut and ModShortcutAlt are the same key, so the
+	// word deletions would end in the shortcut switch below.
+	wordDelete := moveByWord && (k.Name == key.NameDeleteBackward || k.Name == key.NameDeleteForward)
+	if k.Modifiers.Contain(key.ModShortcut) && !wordDelete {
 		switch k.Name {
 		// Initiate a paste operation, by requesting the clipboard contents; other
 		// half is in Editor.processKey() under clipboard.Event.

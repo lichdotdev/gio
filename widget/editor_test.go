@@ -630,6 +630,41 @@ func TestEditorCaretConsistency(t *testing.T) {
 	}
 }
 
+// TestEditorDeleteWordKeys ensures the word deletion shortcuts reach
+// deleteWord where they share their modifier with ModShortcut.
+func TestEditorDeleteWordKeys(t *testing.T) {
+	tests := []struct {
+		name  key.Name
+		caret int
+		want  string
+	}{
+		{key.NameDeleteBackward, 11, "hello "},
+		{key.NameDeleteForward, 0, " world"},
+	}
+	for _, tt := range tests {
+		r := new(input.Router)
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Constraints: layout.Constraints{Max: image.Pt(100, 100)},
+			Locale:      english,
+			Source:      r.Source(),
+		}
+		cache := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
+		e := new(Editor)
+		e.SetText("hello world")
+		e.SetCaret(tt.caret, tt.caret)
+		gtx.Execute(key.FocusCmd{Tag: e})
+		e.Layout(gtx, cache, font.Font{}, unit.Sp(10), op.CallOp{}, op.CallOp{})
+		r.Frame(gtx.Ops)
+		gtx.Ops.Reset()
+		r.Queue(key.Event{Name: tt.name, Modifiers: key.ModShortcutAlt, State: key.Press})
+		e.Layout(gtx, cache, font.Font{}, unit.Sp(10), op.CallOp{}, op.CallOp{})
+		if got := e.Text(); got != tt.want {
+			t.Errorf("%s with %v: got %q, want %q", tt.name, key.ModShortcutAlt, got, tt.want)
+		}
+	}
+}
+
 func TestEditorMoveWord(t *testing.T) {
 	type Test struct {
 		Text  string
