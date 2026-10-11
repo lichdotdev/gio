@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -101,6 +102,9 @@ type wlDisplay struct {
 	repeat        repeatState
 	poller        poller
 	readClipClose chan struct{}
+	// dropClose is closed when the display is destroyed, to
+	// abandon the transfers of dropped data still in flight.
+	dropClose chan struct{}
 }
 
 type wlSeat struct {
@@ -139,6 +143,22 @@ type wlSeat struct {
 	source *C.struct_wl_data_source
 	// content is the data belonging to source.
 	content []byte
+
+	// dragOffer is the wl_data_offer of a drag from outside the
+	// program, if any. It is kept out of flushOffers until the drag
+	// leaves or drops.
+	dragOffer *C.struct_wl_data_offer
+	// dragFocus is the window the drag is over.
+	dragFocus *window
+	// dragPos is the most recent drag position in dragFocus.
+	dragPos f32.Point
+}
+
+// wlDrop is dropped data read off the event loop, together with the
+// offer to finish once the data is delivered.
+type wlDrop struct {
+	offer *C.struct_wl_data_offer
+	event DropEvent
 }
 
 type repeatState struct {
@@ -218,6 +238,7 @@ type window struct {
 	inCompositor bool        // window is moving or being resized
 
 	clipReads chan transfer.DataEvent
+	dropReads chan wlDrop
 
 	wakeups chan struct{}
 
@@ -360,6 +381,7 @@ func (d *wlDisplay) createNativeWindow(options []Option) (*window, error) {
 		ppsp:      ppdp,
 		wakeups:   make(chan struct{}, 1),
 		clipReads: make(chan transfer.DataEvent, 1),
+		dropReads: make(chan wlDrop, 1),
 	}
 	w.surf = C.wl_compositor_create_surface(d.compositor)
 	if w.surf == nil {
@@ -476,7 +498,7 @@ func gio_onSeatCapabilities(data unsafe.Pointer, seat *C.struct_wl_seat, caps C.
 // content.
 func (s *wlSeat) flushOffers() {
 	for o := range s.offers {
-		if o == s.clipboard {
+		if o == s.clipboard || o == s.dragOffer {
 			continue
 		}
 		// We're only interested in clipboard offers.
@@ -507,6 +529,8 @@ func (s *wlSeat) destroy() {
 		C.wl_keyboard_release(s.keyboard)
 	}
 	s.clipboard = nil
+	s.dragOffer = nil
+	s.dragFocus = nil
 	s.flushOffers()
 	if s.dataDev != nil {
 		C.wl_data_device_release(s.dataDev)
@@ -757,19 +781,111 @@ func gio_onDataDeviceOffer(data unsafe.Pointer, dataDev *C.struct_wl_data_device
 func gio_onDataDeviceEnter(data unsafe.Pointer, dataDev *C.struct_wl_data_device, serial C.uint32_t, surf *C.struct_wl_surface, x, y C.wl_fixed_t, id *C.struct_wl_data_offer) {
 	s := callbackLoad(data).(*wlSeat)
 	s.serial = serial
+	s.dragOffer = id
 	s.flushOffers()
+	w := callbackLoad(unsafe.Pointer(surf)).(*window)
+	s.dragFocus = w
+	s.dragPos = f32.Point{
+		X: fromFixed(x) * float32(w.scale),
+		Y: fromFixed(y) * float32(w.scale),
+	}
+	types := s.offers[id]
+	if id != nil {
+		if slices.Contains(types, dropMimeType) {
+			cmime := C.CString(dropMimeType)
+			C.wl_data_offer_accept(id, serial, cmime)
+			C.free(unsafe.Pointer(cmime))
+			copyAction := C.uint32_t(C.WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY)
+			C.wl_data_offer_set_actions(id, copyAction, copyAction)
+		} else {
+			C.wl_data_offer_accept(id, serial, nil)
+		}
+	}
+	w.ProcessEvent(DropEvent{Kind: DropEnter, Position: s.dragPos, Types: types})
 }
 
 //export gio_onDataDeviceLeave
 func gio_onDataDeviceLeave(data unsafe.Pointer, dataDev *C.struct_wl_data_device) {
+	s := callbackLoad(data).(*wlSeat)
+	w := s.dragFocus
+	if w == nil {
+		return
+	}
+	s.dragFocus = nil
+	if o := s.dragOffer; o != nil {
+		s.dragOffer = nil
+		s.destroyOffer(o)
+	}
+	w.ProcessEvent(DropEvent{Kind: DropLeave})
 }
 
 //export gio_onDataDeviceMotion
 func gio_onDataDeviceMotion(data unsafe.Pointer, dataDev *C.struct_wl_data_device, t C.uint32_t, x, y C.wl_fixed_t) {
+	s := callbackLoad(data).(*wlSeat)
+	w := s.dragFocus
+	if w == nil {
+		return
+	}
+	s.dragPos = f32.Point{
+		X: fromFixed(x) * float32(w.scale),
+		Y: fromFixed(y) * float32(w.scale),
+	}
+	w.ProcessEvent(DropEvent{Kind: DropMove, Position: s.dragPos})
 }
 
 //export gio_onDataDeviceDrop
 func gio_onDataDeviceDrop(data unsafe.Pointer, dataDev *C.struct_wl_data_device) {
+	s := callbackLoad(data).(*wlSeat)
+	w := s.dragFocus
+	if w == nil {
+		return
+	}
+	o := s.dragOffer
+	// The drag is over; a leave following the drop must not
+	// destroy the offer while its data is in flight.
+	s.dragFocus, s.dragOffer = nil, nil
+	if o == nil || !slices.Contains(s.offers[o], dropMimeType) {
+		if o != nil {
+			s.destroyOffer(o)
+		}
+		w.ProcessEvent(DropEvent{Kind: DropLeave})
+		return
+	}
+	types := s.offers[o]
+	delete(s.offers, o)
+	r, pw, err := os.Pipe()
+	if err != nil {
+		s.destroyOffer(o)
+		w.ProcessEvent(DropEvent{Kind: DropLeave})
+		return
+	}
+	cmime := C.CString(dropMimeType)
+	C.wl_data_offer_receive(o, cmime, C.int(pw.Fd()))
+	C.free(unsafe.Pointer(cmime))
+	// wl_data_offer_receive dups the write end.
+	pw.Close()
+	e := DropEvent{Kind: DropDrop, Position: s.dragPos, Types: types, Type: dropMimeType}
+	done := s.disp.dropClose
+	// Don't let slow drag sources block the event loop.
+	go func() {
+		defer r.Close()
+		if data, err := io.ReadAll(r); err == nil {
+			e.Data = data
+		} else {
+			e = DropEvent{Kind: DropLeave}
+		}
+		select {
+		case w.dropReads <- wlDrop{offer: o, event: e}:
+			w.disp.wakeup()
+		case <-done:
+		}
+	}()
+}
+
+func (s *wlSeat) destroyOffer(o *C.struct_wl_data_offer) {
+	delete(s.offers, o)
+	callbackDelete(unsafe.Pointer(o))
+	C.wl_data_offer_destroy(o)
 }
 
 //export gio_onDataDeviceSelection
@@ -1421,6 +1537,14 @@ func (w *window) dispatch() {
 	case e := <-w.clipReads:
 		w.disp.readClipClose = nil
 		w.ProcessEvent(e)
+	case d := <-w.dropReads:
+		if d.event.Kind == DropDrop {
+			C.wl_data_offer_finish(d.offer)
+		}
+		if s := w.disp.seat; s != nil {
+			s.destroyOffer(d.offer)
+		}
+		w.ProcessEvent(d.event)
 	case <-w.wakeups:
 		w.w.Invalidate()
 	default:
@@ -2126,6 +2250,7 @@ func newWLDisplay() (*wlDisplay, error) {
 	d := &wlDisplay{
 		outputMap:    make(map[C.uint32_t]*C.struct_wl_output),
 		outputConfig: make(map[*C.struct_wl_output]*wlOutput),
+		dropClose:    make(chan struct{}),
 	}
 	pipe := make([]int, 2)
 	if err := syscall.Pipe2(pipe, syscall.O_NONBLOCK|syscall.O_CLOEXEC); err != nil {
@@ -2165,6 +2290,10 @@ func (d *wlDisplay) destroy() {
 	if d.readClipClose != nil {
 		close(d.readClipClose)
 		d.readClipClose = nil
+	}
+	if d.dropClose != nil {
+		close(d.dropClose)
+		d.dropClose = nil
 	}
 	if d.notify.write != 0 {
 		syscall.Close(d.notify.write)

@@ -14,6 +14,8 @@ import (
 // Only text/uri-list data is requested from the drag source. A drag that
 // doesn't offer it still produces DropEnter, DropMove and DropLeave, but
 // the platform is told the window won't accept it.
+//
+// DropEvents are supported on Wayland.
 type DropEvent struct {
 	Kind DropKind
 	// Position is the drag position in pixels, in the coordinate
@@ -30,6 +32,10 @@ type DropEvent struct {
 	// only for DropDrop.
 	Data []byte
 }
+
+// dropMimeType is the only type requested from drags from outside
+// the program.
+const dropMimeType = "text/uri-list"
 
 // DropKind is the kind of a DropEvent.
 type DropKind uint8
