@@ -1095,34 +1095,31 @@ func (e *Editor) deleteWord(distance int) (deletedRunes int) {
 		words, direction = distance*-1, -1
 	}
 	caret, _ := e.text.Selection()
-	// atEnd if offset is at or beyond either side of the buffer.
-	atEnd := func(runes int) bool {
-		idx := caret + runes*direction
-		return idx <= 0 || idx >= e.Len()
-	}
-	// next returns the appropriate rune given the direction and offset in runes).
-	next := func(runes int) rune {
-		idx := caret + runes*direction
-		if idx < 0 {
-			idx = 0
-		} else if idx > e.Len() {
-			idx = e.Len()
-		}
-		off := e.text.ByteOffset(idx)
-		var r rune
+	// done reports whether the n-th rune from the caret, in direction, lies
+	// outside the buffer.
+	done := func(n int) bool {
 		if direction < 0 {
-			r, _, _ = e.text.ReadRuneBefore(int64(off))
-		} else {
-			r, _, _ = e.text.ReadRuneAt(int64(off))
+			return caret-n < 0
 		}
-		return r
+		return caret+n-1 >= e.Len()
 	}
-	runes := 1
+	// space reports whether the n-th rune from the caret is a space.
+	space := func(n int) bool {
+		idx := caret + n - 1
+		if direction < 0 {
+			idx = caret - n
+		}
+		r, _, _ := e.text.ReadRuneAt(int64(e.text.ByteOffset(idx)))
+		return unicode.IsSpace(r)
+	}
+	// A word takes the spaces before it with it, as MoveWord passes them.
+	runes := 0
 	for range words {
-		r := next(runes)
-		wantSpace := unicode.IsSpace(r)
-		for r := next(runes); unicode.IsSpace(r) == wantSpace && !atEnd(runes); r = next(runes) {
-			runes += 1
+		for !done(runes+1) && space(runes+1) {
+			runes++
+		}
+		for !done(runes+1) && !space(runes+1) {
+			runes++
 		}
 	}
 	deletedRunes += e.Delete(runes * direction)

@@ -832,24 +832,23 @@ func TestEditorDeleteWord(t *testing.T) {
 		{"hello", 0, 0, -1, 0, "hello"},
 		{"hello", 0, 0, 1, 0, ""},
 
-		// Document (imho) incorrect behavior w.r.t. deleting spaces following
-		// words.
-		{"hello world", 0, 0, 1, 0, " world"},   // Should be "world", if you ask me.
-		{"hello world", 0, 0, 2, 0, "world"},    // Should be "".
-		{"hello ", 0, 0, 1, 0, " "},             // Should be "".
-		{"hello world", 11, 0, -1, 6, "hello "}, // Should be "hello".
-		{"hello world", 11, 0, -2, 5, "hello"},  // Should be "".
-		{"hello ", 6, 0, -1, 0, ""},             // Correct result.
+		// A word takes the spaces before it, in the direction of deletion.
+		{"hello world", 0, 0, 1, 0, " world"},
+		{"hello world", 0, 0, 2, 0, ""},
+		{"hello ", 0, 0, 1, 0, " "},
+		{"hello world", 11, 0, -1, 6, "hello "},
+		{"hello world", 11, 0, -2, 0, ""},
+		{"hello ", 6, 0, -1, 0, ""},
 
 		{"hello world", 3, 0, 1, 3, "hel world"},
 		{"hello world", 3, 0, -1, 0, "lo world"},
 		{"hello world", 8, 0, -1, 6, "hello rld"},
 		{"hello world", 8, 0, 1, 8, "hello wo"},
 		{"hello    world", 3, 0, 1, 3, "hel    world"},
-		{"hello    world", 3, 0, 2, 3, "helworld"},
+		{"hello    world", 3, 0, 2, 3, "hel"},
 		{"hello    world", 8, 0, 1, 8, "hello   "},
-		{"hello    world", 8, 0, -1, 5, "hello world"},
-		{"hello brave new world", 0, 0, 3, 0, " new world"},
+		{"hello    world", 8, 0, -1, 0, " world"},
+		{"hello brave new world", 0, 0, 3, 0, " world"},
 		{"helléèçàô world", 3, 0, 1, 3, "hel world"}, // unicode char with length > 1 in deleted part
 		// Add selected text.
 		//
