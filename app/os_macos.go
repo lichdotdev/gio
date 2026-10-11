@@ -38,6 +38,11 @@ import (
 #define MOUSE_DOWN 3
 #define MOUSE_SCROLL 4
 
+#define DROP_ENTER 1
+#define DROP_MOVE 2
+#define DROP_LEAVE 3
+#define DROP_DROP 4
+
 __attribute__ ((visibility ("hidden"))) void gio_main(void);
 __attribute__ ((visibility ("hidden"))) void gio_init(void);
 __attribute__ ((visibility ("hidden"))) CFTypeRef gio_createView(int presentWithTrans);
@@ -674,6 +679,31 @@ func gio_onText(h C.uintptr_t, cstr C.CFTypeRef) {
 	str := nsstringToString(cstr)
 	w := windowFor(h)
 	w.w.EditorInsert(str)
+}
+
+//export gio_onDrag
+func gio_onDrag(h C.uintptr_t, kind C.int, x, y C.CGFloat, files C.int, uriList *C.char) {
+	w := windowFor(h)
+	e := DropEvent{Position: f32.Point{X: float32(x) * w.scale, Y: float32(y) * w.scale}}
+	var types []string
+	if files != 0 {
+		types = []string{dropMimeType}
+	}
+	switch kind {
+	case C.DROP_ENTER:
+		e.Kind = DropEnter
+		e.Types = types
+	case C.DROP_MOVE:
+		e.Kind = DropMove
+	case C.DROP_LEAVE:
+		e = DropEvent{Kind: DropLeave}
+	case C.DROP_DROP:
+		e.Kind = DropDrop
+		e.Types = types
+		e.Type = dropMimeType
+		e.Data = []byte(C.GoString(uriList))
+	}
+	w.ProcessEvent(e)
 }
 
 //export gio_onMouse

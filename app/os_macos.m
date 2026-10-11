@@ -78,6 +78,20 @@ static void handleMouse(GioView *view, NSEvent *event, int typ, CGFloat dx, CGFl
 	gio_onMouse(view.handle, (__bridge CFTypeRef)event, typ, event.buttonNumber, p.x, height - p.y, dx, dy, [event timestamp], [event modifierFlags]);
 }
 
+// handleDrag reports a drag over view and returns the operation the
+// view accepts.
+static NSDragOperation handleDrag(GioView *view, id<NSDraggingInfo> info, int kind) {
+	NSPoint p = [view convertPoint:[info draggingLocation] fromView:nil];
+	// Origin is in the lower left corner. Convert to upper left.
+	CGFloat height = view.bounds.size.height;
+	BOOL files = [[[info draggingPasteboard] types] containsObject:NSPasteboardTypeFileURL];
+	gio_onDrag(view.handle, kind, p.x, height - p.y, files ? 1 : 0, NULL);
+	if (!files || ([info draggingSourceOperationMask] & NSDragOperationCopy) == 0) {
+		return NSDragOperationNone;
+	}
+	return NSDragOperationCopy;
+}
+
 @implementation GioView
 - (void)setFrameSize:(NSSize)newSize {
 	[super setFrameSize:newSize];
@@ -129,6 +143,40 @@ static void handleMouse(GioView *view, NSEvent *event, int typ, CGFloat dx, CGFl
 }
 - (void)otherMouseDragged:(NSEvent *)event {
 	handleMouse(self, event, MOUSE_MOVE, 0, 0);
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+	return handleDrag(self, sender, DROP_ENTER);
+}
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+	return handleDrag(self, sender, DROP_MOVE);
+}
+- (BOOL)wantsPeriodicDraggingUpdates {
+	return NO;
+}
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+	gio_onDrag(self.handle, DROP_LEAVE, 0, 0, 0, NULL);
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+	NSArray<NSURL *> *urls = [[sender draggingPasteboard] readObjectsForClasses:@[[NSURL class]]
+																		options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+	NSMutableString *uriList = [NSMutableString string];
+	for (NSURL *url in urls) {
+		// Finder offers file reference URLs, file:///.file/id=...
+		NSURL *path = url.filePathURL;
+		if (path == nil) {
+			continue;
+		}
+		[uriList appendString:path.absoluteString];
+		[uriList appendString:@"\r\n"];
+	}
+	if (uriList.length == 0) {
+		gio_onDrag(self.handle, DROP_LEAVE, 0, 0, 0, NULL);
+		return NO;
+	}
+	NSPoint p = [self convertPoint:[sender draggingLocation] fromView:nil];
+	CGFloat height = self.bounds.size.height;
+	gio_onDrag(self.handle, DROP_DROP, p.x, height - p.y, 1, (char *)[uriList UTF8String]);
+	return YES;
 }
 - (void)scrollWheel:(NSEvent *)event {
 	CGFloat dx = -event.scrollingDeltaX;
@@ -403,6 +451,7 @@ CFTypeRef gio_createView(int presentWithTrans) {
 		view.presentWithTrans = presentWithTrans ? YES : NO;
 		view.wantsLayer = YES;
 		view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+		[view registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
 
 		[[NSNotificationCenter defaultCenter] addObserver:view
 												 selector:@selector(applicationWillUnhide:)

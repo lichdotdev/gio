@@ -15,15 +15,15 @@ import (
 // doesn't offer it still produces DropEnter, DropMove and DropLeave, but
 // the platform is told the window won't accept it.
 //
-// DropEvents are supported on Wayland, X11 and Windows.
+// DropEvents are supported on Wayland, X11, Windows and macOS.
 type DropEvent struct {
 	Kind DropKind
 	// Position is the drag position in pixels, in the coordinate
 	// space of FrameEvent. It is unset for DropLeave.
 	Position f32.Point
 	// Types lists the MIME types offered by the drag source. It is
-	// set for DropEnter and DropDrop. On Windows, it lists only
-	// text/uri-list, when the source offers files.
+	// set for DropEnter and DropDrop. On Windows and macOS, it lists
+	// only text/uri-list, when the source offers files.
 	Types []string
 	// Type is the MIME type of Data. It is set only for DropDrop.
 	Type string
