@@ -117,6 +117,10 @@ type eventSummary struct {
 	framePending bool
 	closing      *ClosingEvent
 	destroy      *DestroyEvent
+	// drops is queued rather than coalesced, because a lost
+	// DropEnter, DropLeave or DropDrop would leave the client's
+	// drag state inconsistent. Only consecutive DropMoves coalesce.
+	drops []DropEvent
 }
 
 type callbacks struct {
@@ -593,6 +597,10 @@ func (w *Window) nextEvent() (event.Event, bool) {
 		e := *s.cfg
 		s.cfg = nil
 		return e, true
+	case len(s.drops) > 0:
+		e := s.drops[0]
+		s.drops = s.drops[1:]
+		return e, true
 	case s.frame != nil:
 		e := *s.frame
 		s.frame = nil
@@ -669,6 +677,16 @@ func (w *Window) processEvent(e event.Event) bool {
 			w.ctx.Unlock()
 		}
 		w.coalesced.view = &e2
+	case DropEvent:
+		if e2.Kind != DropLeave {
+			e2.Position = e2.Position.Sub(f32.Pt(float32(w.lastFrame.off.X), float32(w.lastFrame.off.Y)))
+		}
+		d := w.coalesced.drops
+		if n := len(d); n > 0 && d[n-1].Kind == DropMove && e2.Kind == DropMove {
+			d[n-1] = e2
+		} else {
+			w.coalesced.drops = append(d, e2)
+		}
 	case ConfigEvent:
 		w.decorations.Decorations.Maximized = e2.Config.Mode == Maximized
 		wasFocused := w.decorations.Config.Focused
