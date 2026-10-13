@@ -48,10 +48,6 @@ func init() {
 		if err := ctx.CreateSurface(eglSurf); err != nil {
 			return nil, err
 		}
-		// We're in charge of the frame callbacks, don't let eglSwapBuffers
-		// wait for callbacks that may never arrive.
-		ctx.EnableVSync(false)
-
 		return &wlContext{Context: ctx, win: w, eglWin: eglWin}, nil
 	}
 }
@@ -77,7 +73,15 @@ func (c *wlContext) Refresh() error {
 }
 
 func (c *wlContext) Lock() error {
-	return c.Context.MakeCurrent()
+	if err := c.Context.MakeCurrent(); err != nil {
+		return err
+	}
+	// We're in charge of the frame callbacks, don't let eglSwapBuffers
+	// wait for callbacks that may never arrive. eglSwapInterval applies to
+	// the surface bound to the current context, so it is a no-op before
+	// MakeCurrent and must follow it.
+	c.Context.EnableVSync(false)
+	return nil
 }
 
 func (c *wlContext) Unlock() {
