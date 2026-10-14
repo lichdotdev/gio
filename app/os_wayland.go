@@ -1173,6 +1173,19 @@ func (w *window) ReadClipboard() {
 	w.disp.readClipClose = make(chan struct{})
 	r, err := w.disp.readClipboard()
 	if r == nil || err != nil {
+		// No text to read: the clipboard holds none (an image, say) or the
+		// read failed. Answer the read empty rather than not at all, which
+		// also releases readClipClose; left set, it refused every later read.
+		e := transfer.DataEvent{
+			Type: "application/text",
+			Open: func() io.ReadCloser { return io.NopCloser(bytes.NewReader(nil)) },
+		}
+		select {
+		case w.clipReads <- e:
+			w.disp.wakeup()
+		default:
+			w.disp.readClipClose = nil
+		}
 		return
 	}
 	// Don't let slow clipboard transfers block event loop.
