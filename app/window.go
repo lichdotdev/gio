@@ -907,6 +907,25 @@ func (w *Window) Perform(actions system.Action) {
 	})
 }
 
+// Activate brings the window to the front and focuses it. token is an
+// xdg-activation token handed over by whoever asked for the activation (a
+// notification server's ActivationToken signal); on Wayland an empty token
+// makes the window ask for its own. Elsewhere it is [system.ActionRaise].
+//
+// Activate is safe for concurrent use.
+func (w *Window) Activate(token string) {
+	if w.driver == nil {
+		return
+	}
+	w.Run(func() {
+		if a, ok := w.driver.(interface{ activate(token string) }); ok {
+			a.activate(token)
+			return
+		}
+		w.driver.Perform(system.ActionRaise)
+	})
+}
+
 // Title sets the title of the window.
 func Title(t string) Option {
 	return func(_ unit.Metric, cnf *Config) {

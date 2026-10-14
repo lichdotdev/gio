@@ -6,6 +6,7 @@
 #include "wayland_xdg_shell.h"
 #include "wayland_xdg_decoration.h"
 #include "wayland_text_input.h"
+#include "wayland_xdg_activation.h"
 #include "_cgo_export.h"
 
 const struct wl_registry_listener gio_registry_listener = {
@@ -119,4 +120,9 @@ const struct wl_data_source_listener gio_data_source_listener = {
 	.dnd_drop_performed = gio_onDataSourceDNDDropPerformed,
 	.dnd_finished = gio_onDataSourceDNDFinished,
 	.action = gio_onDataSourceAction,
+};
+
+const struct xdg_activation_token_v1_listener gio_xdg_activation_token_v1_listener = {
+	// Cast away const parameter.
+	.done = (void (*)(void *, struct xdg_activation_token_v1 *, const char *))gio_onActivationTokenDone,
 };

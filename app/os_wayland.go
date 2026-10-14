@@ -44,9 +44,13 @@ import (
 //go:generate wayland-scanner client-header /usr/share/wayland-protocols/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml wayland_xdg_decoration.h
 //go:generate wayland-scanner private-code /usr/share/wayland-protocols/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml wayland_xdg_decoration.c
 
+//go:generate wayland-scanner client-header /usr/share/wayland-protocols/staging/xdg-activation/xdg-activation-v1.xml wayland_xdg_activation.h
+//go:generate wayland-scanner private-code /usr/share/wayland-protocols/staging/xdg-activation/xdg-activation-v1.xml wayland_xdg_activation.c
+
 //go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_xdg_shell.c
 //go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_xdg_decoration.c
 //go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_text_input.c
+//go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_xdg_activation.c
 
 /*
 #cgo linux pkg-config: wayland-client wayland-cursor
@@ -60,6 +64,7 @@ import (
 #include "wayland_text_input.h"
 #include "wayland_xdg_shell.h"
 #include "wayland_xdg_decoration.h"
+#include "wayland_xdg_activation.h"
 
 extern const struct wl_registry_listener gio_registry_listener;
 extern const struct wl_surface_listener gio_surface_listener;
@@ -74,6 +79,7 @@ extern const struct wl_pointer_listener gio_pointer_listener;
 extern const struct wl_touch_listener gio_touch_listener;
 extern const struct wl_keyboard_listener gio_keyboard_listener;
 extern const struct zwp_text_input_v3_listener gio_zwp_text_input_v3_listener;
+extern const struct xdg_activation_token_v1_listener gio_xdg_activation_token_v1_listener;
 extern const struct wl_data_device_listener gio_data_device_listener;
 extern const struct wl_data_offer_listener gio_data_offer_listener;
 extern const struct wl_data_source_listener gio_data_source_listener;
@@ -89,6 +95,7 @@ type wlDisplay struct {
 	shm               *C.struct_wl_shm
 	dataDeviceManager *C.struct_wl_data_device_manager
 	decor             *C.struct_zxdg_decoration_manager_v1
+	activation        *C.struct_xdg_activation_v1
 	seat              *wlSeat
 	xkb               *xkb.Context
 	outputMap         map[C.uint32_t]*C.struct_wl_output
@@ -182,6 +189,7 @@ type window struct {
 	wmSurf     *C.struct_xdg_surface
 	topLvl     *C.struct_xdg_toplevel
 	decor      *C.struct_zxdg_toplevel_decoration_v1
+	activating *C.struct_xdg_activation_token_v1
 	ppdp, ppsp float32
 	scroll     struct {
 		time  time.Duration
@@ -744,6 +752,8 @@ func gio_onRegistryGlobal(data unsafe.Pointer, reg *C.struct_wl_registry, name C
 		d.wm = (*C.struct_xdg_wm_base)(C.wl_registry_bind(reg, name, &C.xdg_wm_base_interface, 1))
 	case "zxdg_decoration_manager_v1":
 		d.decor = (*C.struct_zxdg_decoration_manager_v1)(C.wl_registry_bind(reg, name, &C.zxdg_decoration_manager_v1_interface, 1))
+	case "xdg_activation_v1":
+		d.activation = (*C.struct_xdg_activation_v1)(C.wl_registry_bind(reg, name, &C.xdg_activation_v1_interface, 1))
 	case "zwp_text_input_manager_v3":
 		d.imm = (*C.struct_zwp_text_input_manager_v3)(C.wl_registry_bind(reg, name, &C.zwp_text_input_manager_v3_interface, 1))
 		if d.seat != nil {
@@ -1307,6 +1317,43 @@ func (w *window) Perform(actions system.Action) {
 	})
 }
 
+// activate asks the compositor to focus the window. An empty token makes the
+// window request its own, which the compositor may only honor while the
+// window's seat has recent input.
+func (w *window) activate(token string) {
+	d := w.disp
+	if d.activation == nil {
+		return
+	}
+	if token != "" {
+		ctoken := C.CString(token)
+		C.xdg_activation_v1_activate(d.activation, ctoken, w.surf)
+		C.free(unsafe.Pointer(ctoken))
+		return
+	}
+	if w.activating != nil {
+		return
+	}
+	t := C.xdg_activation_v1_get_activation_token(d.activation)
+	w.activating = t
+	callbackStore(unsafe.Pointer(t), w)
+	C.xdg_activation_token_v1_add_listener(t, &C.gio_xdg_activation_token_v1_listener, unsafe.Pointer(t))
+	if s := d.seat; s != nil {
+		C.xdg_activation_token_v1_set_serial(t, s.serial, s.seat)
+	}
+	C.xdg_activation_token_v1_set_surface(t, w.surf)
+	C.xdg_activation_token_v1_commit(t)
+}
+
+//export gio_onActivationTokenDone
+func gio_onActivationTokenDone(data unsafe.Pointer, t *C.struct_xdg_activation_token_v1, token *C.char) {
+	w := callbackLoad(data).(*window)
+	C.xdg_activation_v1_activate(w.disp.activation, token, w.surf)
+	C.xdg_activation_token_v1_destroy(t)
+	callbackDelete(data)
+	w.activating = nil
+}
+
 func (w *window) move(serial C.uint32_t) {
 	s := w.disp.seat
 	if w.inCompositor || s.pointerFocus != w {
@@ -1727,6 +1774,10 @@ func (w *window) destroy() {
 	}
 	if w.decor != nil {
 		C.zxdg_toplevel_decoration_v1_destroy(w.decor)
+	}
+	if w.activating != nil {
+		C.xdg_activation_token_v1_destroy(w.activating)
+		callbackDelete(unsafe.Pointer(w.activating))
 	}
 	callbackDelete(unsafe.Pointer(w.surf))
 }
@@ -2330,6 +2381,9 @@ func (d *wlDisplay) destroy() {
 	}
 	if d.decor != nil {
 		C.zxdg_decoration_manager_v1_destroy(d.decor)
+	}
+	if d.activation != nil {
+		C.xdg_activation_v1_destroy(d.activation)
 	}
 	if d.shm != nil {
 		C.wl_shm_destroy(d.shm)
