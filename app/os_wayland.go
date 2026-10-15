@@ -1020,7 +1020,15 @@ func gio_onPointerLeave(data unsafe.Pointer, p *C.struct_wl_pointer, serial C.ui
 	if w.inCompositor {
 		w.inCompositor = false
 		w.ProcessEvent(pointer.Event{Kind: pointer.Cancel})
+		return
 	}
+	w.ProcessEvent(pointer.Event{
+		Kind:      pointer.Leave,
+		Position:  w.lastPos,
+		Buttons:   w.pointerBtns,
+		Source:    pointer.Mouse,
+		Modifiers: w.disp.xkb.Modifiers(),
+	})
 }
 
 //export gio_onPointerMotion
