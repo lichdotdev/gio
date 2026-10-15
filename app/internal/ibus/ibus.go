@@ -150,15 +150,15 @@ type messageHandler IBus
 
 func getTextArg(signal *dbus.Signal) (string, key.Range, bool) {
 	if len(signal.Body) == 0 {
-		return "", key.Range{-1, -1}, false
+		return "", key.Range{Start: -1, End: -1}, false
 	}
 	body, ok := signal.Body[0].(dbus.Variant)
 	if !ok {
-		return "", key.Range{-1, -1}, false
+		return "", key.Range{Start: -1, End: -1}, false
 	}
 	args, ok := body.Value().([]any)
 	if !ok || len(args) <= 2 {
-		return "", key.Range{-1, -1}, false
+		return "", key.Range{Start: -1, End: -1}, false
 	}
 	sel := getSelectionRangeMaybe(args)
 	text, ok := args[2].(string)
@@ -174,7 +174,7 @@ func getVisible(signal *dbus.Signal) bool {
 }
 
 func getSelectionRangeMaybe(args []any) key.Range {
-	none := key.Range{-1, -1}
+	none := key.Range{Start: -1, End: -1}
 	if len(args) <= 3 {
 		return none
 	}
@@ -211,7 +211,7 @@ func getSelectionRangeMaybe(args []any) key.Range {
 			if cand != none {
 				return none
 			}
-			cand = key.Range{int(v[2]), int(v[3])}
+			cand = key.Range{Start: int(v[2]), End: int(v[3])}
 		}
 	}
 	return cand
@@ -268,11 +268,11 @@ func (h *messageHandler) DeliverSignal(iface, name string, signal *dbus.Signal) 
 		if !ibus.visible {
 			return
 		}
-		ibus.h.Event("", key.Range{-1, -1}, false, false)
+		ibus.h.Event("", key.Range{Start: -1, End: -1}, false, false)
 		ibus.visible = false
 	case "CommitText":
 		if text, _, ok := getTextArg(signal); ok {
-			ibus.h.Event(text, key.Range{-1, -1}, true, false)
+			ibus.h.Event(text, key.Range{Start: -1, End: -1}, true, false)
 		}
 	}
 }
