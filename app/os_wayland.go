@@ -47,10 +47,17 @@ import (
 //go:generate wayland-scanner client-header /usr/share/wayland-protocols/staging/xdg-activation/xdg-activation-v1.xml wayland_xdg_activation.h
 //go:generate wayland-scanner private-code /usr/share/wayland-protocols/staging/xdg-activation/xdg-activation-v1.xml wayland_xdg_activation.c
 
+//go:generate wayland-scanner client-header /usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml wayland_cursor_shape.h
+//go:generate wayland-scanner private-code /usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml wayland_cursor_shape.c
+// cursor-shape-v1 refers to the tablet tool interface, which only the tablet code defines.
+//go:generate wayland-scanner private-code /usr/share/wayland-protocols/stable/tablet/tablet-v2.xml wayland_tablet.c
+
 //go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_xdg_shell.c
 //go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_xdg_decoration.c
 //go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_text_input.c
 //go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_xdg_activation.c
+//go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_cursor_shape.c
+//go:generate sed -i "1s;^;//go:build ((linux \\&\\& !android) || freebsd) \\&\\& !nowayland\\n\\n;" wayland_tablet.c
 
 /*
 #cgo linux pkg-config: wayland-client wayland-cursor
@@ -65,6 +72,7 @@ import (
 #include "wayland_xdg_shell.h"
 #include "wayland_xdg_decoration.h"
 #include "wayland_xdg_activation.h"
+#include "wayland_cursor_shape.h"
 
 extern const struct wl_registry_listener gio_registry_listener;
 extern const struct wl_surface_listener gio_surface_listener;
@@ -96,6 +104,7 @@ type wlDisplay struct {
 	dataDeviceManager *C.struct_wl_data_device_manager
 	decor             *C.struct_zxdg_decoration_manager_v1
 	activation        *C.struct_xdg_activation_v1
+	cursorShape       *C.struct_wp_cursor_shape_manager_v1
 	seat              *wlSeat
 	xkb               *xkb.Context
 	outputMap         map[C.uint32_t]*C.struct_wl_output
@@ -126,6 +135,10 @@ type wlSeat struct {
 	imActive bool
 	imHint   key.InputHint
 	imState  textInputState
+
+	// cursorShape is the pointer's cursor-shape-v1 device, nil until the
+	// first cursor is set or when the compositor lacks the protocol.
+	cursorShape *C.struct_wp_cursor_shape_device_v1
 
 	// The most recent input serial.
 	serial C.uint32_t
@@ -205,6 +218,9 @@ type window struct {
 	cursor struct {
 		theme  *C.struct_wl_cursor_theme
 		cursor *C.struct_wl_cursor
+		// name is what cursor was loaded from, to load it again from a
+		// theme reloaded at another scale.
+		name pointer.Cursor
 		// system is the active cursor for system gestures
 		// such as border resizes and window moves. It
 		// is nil if the pointer is not in a system gesture
@@ -222,6 +238,8 @@ type window struct {
 			resizeSouthWest *C.struct_wl_cursor
 			resizeSouthEast *C.struct_wl_cursor
 		}
+		// systemEdge is the resize edge of system.
+		systemEdge C.uint32_t
 	}
 
 	fling struct {
@@ -413,17 +431,7 @@ func (d *wlDisplay) createNativeWindow(options []Option) (*window, error) {
 	defer C.free(unsafe.Pointer(id))
 	C.xdg_toplevel_set_app_id(w.topLvl, id)
 
-	cursorTheme := C.CString(os.Getenv("XCURSOR_THEME"))
-	defer C.free(unsafe.Pointer(cursorTheme))
-	cursorSize := 32
-	if envSize, ok := os.LookupEnv("XCURSOR_SIZE"); ok && envSize != "" {
-		size, err := strconv.Atoi(envSize)
-		if err == nil {
-			cursorSize = size
-		}
-	}
-
-	w.cursor.theme = C.wl_cursor_theme_load(cursorTheme, C.int(cursorSize*w.scale), d.shm)
+	w.cursor.theme = loadCursorTheme(d.shm, w.scale)
 	if w.cursor.theme == nil {
 		w.destroy()
 		return nil, errors.New("wayland: wl_cursor_theme_load failed")
@@ -451,6 +459,41 @@ func (d *wlDisplay) createNativeWindow(options []Option) (*window, error) {
 	}
 	w.updateOpaqueRegion()
 	return w, nil
+}
+
+func loadCursorTheme(shm *C.struct_wl_shm, scale int) *C.struct_wl_cursor_theme {
+	cursorTheme := C.CString(os.Getenv("XCURSOR_THEME"))
+	defer C.free(unsafe.Pointer(cursorTheme))
+	cursorSize := 32
+	if envSize, ok := os.LookupEnv("XCURSOR_SIZE"); ok && envSize != "" {
+		size, err := strconv.Atoi(envSize)
+		if err == nil {
+			cursorSize = size
+		}
+	}
+	return C.wl_cursor_theme_load(cursorTheme, C.int(cursorSize*scale), shm)
+}
+
+// reloadCursors loads the cursor theme again at the window's scale. The
+// window starts at the largest scale of all outputs; without a reload, an
+// output with a smaller scale gets cursor images of the old scale with
+// hotspots divided by the new one, and the cursor jumps on entering.
+func (w *window) reloadCursors() {
+	theme := loadCursorTheme(w.disp.shm, w.scale)
+	if theme == nil {
+		return
+	}
+	C.wl_cursor_theme_destroy(w.cursor.theme)
+	w.cursor.theme = theme
+	// loadCursor falls back to the pointer cursor, which belongs to the old
+	// theme until loadCursors replaces it.
+	w.cursor.cursors.pointer = nil
+	w.loadCursors()
+	w.cursor.cursor = w.loadCursor(w.cursor.name)
+	// The next pointer motion picks the gesture cursor from the new theme.
+	w.cursor.system = nil
+	C.wl_surface_set_buffer_scale(w.cursor.surf, C.int32_t(w.scale))
+	w.updateCursor()
 }
 
 func (w *window) loadCursors() {
@@ -527,9 +570,7 @@ func (s *wlSeat) destroy() {
 	}
 	s.imFocus = nil
 	s.resetTextInputState()
-	if s.pointer != nil {
-		C.wl_pointer_release(s.pointer)
-	}
+	s.releasePointer()
 	if s.touch != nil {
 		C.wl_touch_release(s.touch)
 	}
@@ -547,6 +588,26 @@ func (s *wlSeat) destroy() {
 		callbackDelete(unsafe.Pointer(s.seat))
 		C.wl_seat_release(s.seat)
 	}
+}
+
+func (s *wlSeat) releasePointer() {
+	if s.cursorShape != nil {
+		C.wp_cursor_shape_device_v1_destroy(s.cursorShape)
+		s.cursorShape = nil
+	}
+	if s.pointer != nil {
+		C.wl_pointer_release(s.pointer)
+		s.pointer = nil
+	}
+}
+
+// cursorShapeDevice returns the pointer's cursor-shape-v1 device, or nil when
+// the compositor lacks the protocol and the window draws its own cursor.
+func (s *wlSeat) cursorShapeDevice() *C.struct_wp_cursor_shape_device_v1 {
+	if s.cursorShape == nil && s.pointer != nil && s.disp.cursorShape != nil {
+		s.cursorShape = C.wp_cursor_shape_manager_v1_get_pointer(s.disp.cursorShape, s.pointer)
+	}
+	return s.cursorShape
 }
 
 func (s *wlSeat) initTextInput() {
@@ -573,8 +634,7 @@ func (s *wlSeat) updateCaps(caps C.uint32_t) {
 		s.pointer = C.wl_seat_get_pointer(s.seat)
 		C.wl_pointer_add_listener(s.pointer, &C.gio_pointer_listener, unsafe.Pointer(s.seat))
 	case s.pointer != nil && caps&C.WL_SEAT_CAPABILITY_POINTER == 0:
-		C.wl_pointer_release(s.pointer)
-		s.pointer = nil
+		s.releasePointer()
 	}
 	switch {
 	case s.touch == nil && caps&C.WL_SEAT_CAPABILITY_TOUCH != 0:
@@ -754,6 +814,8 @@ func gio_onRegistryGlobal(data unsafe.Pointer, reg *C.struct_wl_registry, name C
 		d.decor = (*C.struct_zxdg_decoration_manager_v1)(C.wl_registry_bind(reg, name, &C.zxdg_decoration_manager_v1_interface, 1))
 	case "xdg_activation_v1":
 		d.activation = (*C.struct_xdg_activation_v1)(C.wl_registry_bind(reg, name, &C.xdg_activation_v1_interface, 1))
+	case "wp_cursor_shape_manager_v1":
+		d.cursorShape = (*C.struct_wp_cursor_shape_manager_v1)(C.wl_registry_bind(reg, name, &C.wp_cursor_shape_manager_v1_interface, 1))
 	case "zwp_text_input_manager_v3":
 		d.imm = (*C.struct_zwp_text_input_manager_v3)(C.wl_registry_bind(reg, name, &C.zwp_text_input_manager_v3_interface, 1))
 		if d.seat != nil {
@@ -1381,6 +1443,7 @@ func (w *window) resize(serial, edge C.uint32_t) {
 }
 
 func (w *window) SetCursor(cursor pointer.Cursor) {
+	w.cursor.name = cursor
 	w.cursor.cursor = w.loadCursor(cursor)
 	w.updateCursor()
 }
@@ -1394,7 +1457,14 @@ func (w *window) updateCursor() {
 	w.setCursor(ptr, s.pointerSerial)
 }
 
+// setCursor sets the cursor through cursor-shape-v1 when the compositor has
+// it, so the cursor follows the compositor's theme, size and scale; otherwise
+// the window draws it from the XCURSOR_THEME the process was started with.
 func (w *window) setCursor(pointer *C.struct_wl_pointer, serial C.uint32_t) {
+	if dev := w.disp.seat.cursorShapeDevice(); dev != nil {
+		w.setCursorShape(pointer, dev, serial)
+		return
+	}
 	c := w.cursor.system
 	if c == nil {
 		c = w.cursor.cursor
@@ -1413,6 +1483,59 @@ func (w *window) setCursor(pointer *C.struct_wl_pointer, serial C.uint32_t) {
 	C.wl_surface_attach(w.cursor.surf, buf, 0, 0)
 	C.wl_surface_damage(w.cursor.surf, 0, 0, C.int32_t(img.width), C.int32_t(img.height))
 	C.wl_surface_commit(w.cursor.surf)
+}
+
+func (w *window) setCursorShape(ptr *C.struct_wl_pointer, dev *C.struct_wp_cursor_shape_device_v1, serial C.uint32_t) {
+	name := w.cursor.name
+	if w.cursor.system != nil {
+		name = edgeCursor[w.cursor.systemEdge]
+	}
+	if name == pointer.CursorNone {
+		C.wl_pointer_set_cursor(ptr, serial, nil, 0, 0)
+		return
+	}
+	C.wp_cursor_shape_device_v1_set_shape(dev, serial, cursorShape[name])
+}
+
+// cursorShape maps pointer.Cursor to its cursor-shape-v1 shape.
+var cursorShape = [...]C.uint32_t{
+	pointer.CursorDefault:                  C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT,
+	pointer.CursorText:                     C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT,
+	pointer.CursorVerticalText:             C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_VERTICAL_TEXT,
+	pointer.CursorPointer:                  C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER,
+	pointer.CursorCrosshair:                C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CROSSHAIR,
+	pointer.CursorAllScroll:                C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL,
+	pointer.CursorColResize:                C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COL_RESIZE,
+	pointer.CursorRowResize:                C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ROW_RESIZE,
+	pointer.CursorGrab:                     C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB,
+	pointer.CursorGrabbing:                 C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING,
+	pointer.CursorNotAllowed:               C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NOT_ALLOWED,
+	pointer.CursorWait:                     C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_WAIT,
+	pointer.CursorProgress:                 C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_PROGRESS,
+	pointer.CursorNorthWestResize:          C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE,
+	pointer.CursorNorthEastResize:          C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE,
+	pointer.CursorSouthWestResize:          C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE,
+	pointer.CursorSouthEastResize:          C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE,
+	pointer.CursorNorthSouthResize:         C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE,
+	pointer.CursorEastWestResize:           C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE,
+	pointer.CursorWestResize:               C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE,
+	pointer.CursorEastResize:               C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE,
+	pointer.CursorNorthResize:              C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE,
+	pointer.CursorSouthResize:              C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE,
+	pointer.CursorNorthEastSouthWestResize: C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NESW_RESIZE,
+	pointer.CursorNorthWestSouthEastResize: C.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NWSE_RESIZE,
+}
+
+// edgeCursor maps the resize edges of systemGesture to their cursors.
+var edgeCursor = map[C.uint32_t]pointer.Cursor{
+	C.XDG_TOPLEVEL_RESIZE_EDGE_TOP:          pointer.CursorNorthResize,
+	C.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM:       pointer.CursorSouthResize,
+	C.XDG_TOPLEVEL_RESIZE_EDGE_LEFT:         pointer.CursorWestResize,
+	C.XDG_TOPLEVEL_RESIZE_EDGE_RIGHT:        pointer.CursorEastResize,
+	C.XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT:     pointer.CursorNorthWestResize,
+	C.XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT:    pointer.CursorNorthEastResize,
+	C.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT:  pointer.CursorSouthWestResize,
+	C.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT: pointer.CursorSouthEastResize,
 }
 
 func (w *window) resetFling() {
@@ -2070,9 +2193,10 @@ func (w *window) onPointerMotion(x, y C.wl_fixed_t, t C.uint32_t) {
 		Time:      time.Duration(t) * time.Millisecond,
 		Modifiers: w.disp.xkb.Modifiers(),
 	})
-	c, _ := w.systemGesture()
+	c, edge := w.systemGesture()
 	if c != w.cursor.system {
 		w.cursor.system = c
+		w.cursor.systemEdge = edge
 		w.updateCursor()
 	}
 }
@@ -2138,6 +2262,7 @@ func (w *window) updateOutputs() {
 	if found && scale != w.scale {
 		w.scale = scale
 		C.wl_surface_set_buffer_scale(w.surf, C.int32_t(w.scale))
+		w.reloadCursors()
 		w.draw(true)
 	}
 	if found {
@@ -2392,6 +2517,9 @@ func (d *wlDisplay) destroy() {
 	}
 	if d.activation != nil {
 		C.xdg_activation_v1_destroy(d.activation)
+	}
+	if d.cursorShape != nil {
+		C.wp_cursor_shape_manager_v1_destroy(d.cursorShape)
 	}
 	if d.shm != nil {
 		C.wl_shm_destroy(d.shm)
