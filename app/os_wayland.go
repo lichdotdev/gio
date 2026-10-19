@@ -262,6 +262,10 @@ type window struct {
 	config       Config
 	wsize        image.Point // window config size before going fullscreen or maximized
 	inCompositor bool        // window is moving or being resized
+	// decoMode is the xdg-decoration mode last asked of the compositor, zero
+	// before the first request.
+	decoMode C.uint32_t
+	caption  captionClicks
 
 	clipReads chan transfer.DataEvent
 	dropReads chan wlDrop
@@ -1135,12 +1139,13 @@ func gio_onPointerButton(data unsafe.Pointer, p *C.struct_wl_pointer, serial, t,
 			return
 		}
 		act, ok := w.w.ActionAt(w.lastPos)
-		if ok && w.config.Mode == Windowed {
-			switch act {
-			case system.ActionMove:
-				w.move(serial)
+		if ok && act == system.ActionMove && w.config.Mode != Fullscreen {
+			if w.caption.press(time.Duration(t)*time.Millisecond, w.lastPos) {
+				w.Configure([]Option{toggledMode(w.config.Mode).Option()})
 				return
 			}
+			w.move(serial)
+			return
 		}
 	}
 	var kind pointer.Kind
@@ -1296,6 +1301,7 @@ func (w *window) Configure(options []Option) {
 	cnf := w.config
 	cnf.apply(cfg, options)
 	w.config.decoHeight = cnf.decoHeight
+	w.requestDecorations(cnf.Decorated)
 
 	switch cnf.Mode {
 	case Fullscreen:
@@ -1346,6 +1352,24 @@ func (w *window) Configure(options []Option) {
 		w.setWindowConstraints()
 	}
 	w.ProcessEvent(ConfigEvent{Config: w.config})
+}
+
+// requestDecorations asks the compositor to draw the window's decorations, or
+// to leave them to the client. The compositor has the last word: its answer
+// arrives in gio_onToplevelDecorationConfigure and lands in Config.Decorated.
+func (w *window) requestDecorations(server bool) {
+	if w.decor == nil {
+		return
+	}
+	mode := C.uint32_t(C.ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE)
+	if server {
+		mode = C.ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+	}
+	if mode == w.decoMode {
+		return
+	}
+	w.decoMode = mode
+	C.zxdg_toplevel_decoration_v1_set_mode(w.decor, mode)
 }
 
 func (w *window) setWindowConstraints() {

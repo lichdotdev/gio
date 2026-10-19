@@ -107,6 +107,11 @@ type x11Window struct {
 
 	pointerBtns pointer.Buttons
 
+	// wmTiles is set under a tiling WM, which keeps its own decoration.
+	wmTiles   bool
+	caption   captionClicks
+	hoverEdge captionEdge
+
 	clipboard struct {
 		content []byte
 	}
@@ -174,8 +179,7 @@ func (w *x11Window) Configure(options []Option) {
 	prev := w.config
 	cnf := w.config
 	cnf.apply(w.metric, options)
-	// Decorations are never disabled.
-	cnf.Decorated = true
+	cnf.Decorated = cnf.Decorated || w.wmTiles
 
 	switch cnf.Mode {
 	case Fullscreen:
@@ -243,6 +247,7 @@ func (w *x11Window) Configure(options []Option) {
 	}
 	if cnf.Decorated != prev.Decorated {
 		w.config.Decorated = cnf.Decorated
+		w.setMotifDecorations(cnf.Decorated)
 	}
 	w.ProcessEvent(ConfigEvent{Config: w.config})
 }
@@ -705,10 +710,15 @@ func (h *x11EventHandler) handleEvents() bool {
 			case C.ButtonRelease:
 				w.pointerBtns &^= btn
 			}
+			if _type == C.ButtonPress && btn == pointer.ButtonPrimary && w.captionPress(bevt, ev.Position, ev.Time) {
+				w.pointerBtns &^= btn
+				continue
+			}
 			ev.Buttons = w.pointerBtns
 			w.ProcessEvent(ev)
 		case C.MotionNotify:
 			mevt := (*C.XMotionEvent)(unsafe.Pointer(xev))
+			w.captionHover(f32.Point{X: float32(mevt.x), Y: float32(mevt.y)})
 			w.ProcessEvent(pointer.Event{
 				Kind:    pointer.Move,
 				Source:  pointer.Mouse,
@@ -949,6 +959,13 @@ func newX11Window(gioWin *callbacks, options []Option) error {
 	// IBus IME
 	if strings.Contains(os.Getenv("XMODIFIERS"), "@im=ibus") {
 		w.ibus, _ = ibus.Start(C.GoString(C.XDisplayString(dpy)), (*ibusEventHandler)(w))
+	}
+
+	// The WM reads the decoration hints as it maps the window.
+	w.wmTiles = isTilingWM(w.wmName())
+	w.config.Decorated = cnf.Decorated || w.wmTiles
+	if !w.config.Decorated {
+		w.setMotifDecorations(false)
 	}
 
 	// make the window visible on the screen
