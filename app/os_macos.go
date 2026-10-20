@@ -512,9 +512,14 @@ func (w *window) Configure(options []Option) {
 	C.setWindowTitlebarAppearsTransparent(window, barTrans)
 	C.setWindowTitleVisibility(window, titleVis)
 	C.setWindowStyleMask(window, mask)
-	C.setWindowStandardButtonHidden(window, C.NSWindowCloseButton, barTrans)
-	C.setWindowStandardButtonHidden(window, C.NSWindowMiniaturizeButton, barTrans)
-	C.setWindowStandardButtonHidden(window, C.NSWindowZoomButton, barTrans)
+	w.config.TrafficLights = cnf.TrafficLights
+	buttonsHidden := barTrans
+	if cnf.TrafficLights {
+		buttonsHidden = C.NO
+	}
+	C.setWindowStandardButtonHidden(window, C.NSWindowCloseButton, buttonsHidden)
+	C.setWindowStandardButtonHidden(window, C.NSWindowMiniaturizeButton, buttonsHidden)
+	C.setWindowStandardButtonHidden(window, C.NSWindowZoomButton, buttonsHidden)
 	// When toggling the titlebar, the layer doesn't update its frame
 	// until the next resize. Force it.
 	C.resetLayerFrame(w.view)

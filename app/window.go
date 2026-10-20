@@ -1017,6 +1017,18 @@ func Decorated(enabled bool) Option {
 	}
 }
 
+// TrafficLights keeps macOS's close, minimize and zoom buttons on a window
+// with Decorated(false), at their place over the window's content, for an
+// app that draws its own title bar around them. Without it an undecorated
+// window has none.
+//
+// TrafficLights is supported on macOS.
+func TrafficLights(enabled bool) Option {
+	return func(_ unit.Metric, cnf *Config) {
+		cnf.TrafficLights = enabled
+	}
+}
+
 // TopMost windows will be rendered above all other non-top-most windows.
 //
 // TopMost windows are supported on macOS, Windows.

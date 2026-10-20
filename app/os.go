@@ -45,6 +45,9 @@ type Config struct {
 	CustomRenderer bool
 	// Decorated reports whether window decorations are provided automatically.
 	Decorated bool
+	// TrafficLights keeps the close, minimize and zoom buttons of an
+	// undecorated macOS window, over the window's content.
+	TrafficLights bool
 	// TopMost windows render above all other non-top-most windows.
 	TopMost bool
 	// Focused reports whether the window is focused.
