@@ -48,6 +48,7 @@ __attribute__ ((visibility ("hidden"))) void gio_init(void);
 __attribute__ ((visibility ("hidden"))) CFTypeRef gio_createView(int presentWithTrans);
 __attribute__ ((visibility ("hidden"))) CFTypeRef gio_createWindow(CFTypeRef viewRef, CGFloat width, CGFloat height);
 __attribute__ ((visibility ("hidden"))) void gio_viewSetHandle(CFTypeRef viewRef, uintptr_t handle);
+__attribute__ ((visibility ("hidden"))) void gio_setTrafficLights(CFTypeRef viewRef, CGFloat titleBar);
 
 static void writeClipboard(CFTypeRef str) {
 	@autoreleasepool {
@@ -514,12 +515,15 @@ func (w *window) Configure(options []Option) {
 	C.setWindowStyleMask(window, mask)
 	w.config.TrafficLights = cnf.TrafficLights
 	buttonsHidden := barTrans
-	if cnf.TrafficLights {
+	titleBar := C.CGFloat(0)
+	if !cnf.Decorated && cnf.TrafficLights > 0 {
 		buttonsHidden = C.NO
+		titleBar = C.CGFloat(cnf.TrafficLights)
 	}
 	C.setWindowStandardButtonHidden(window, C.NSWindowCloseButton, buttonsHidden)
 	C.setWindowStandardButtonHidden(window, C.NSWindowMiniaturizeButton, buttonsHidden)
 	C.setWindowStandardButtonHidden(window, C.NSWindowZoomButton, buttonsHidden)
+	C.gio_setTrafficLights(w.view, titleBar)
 	// When toggling the titlebar, the layer doesn't update its frame
 	// until the next resize. Force it.
 	C.resetLayerFrame(w.view)

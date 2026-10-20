@@ -17,7 +17,40 @@ __attribute__ ((visibility ("hidden"))) CALayer *gio_layerFactory(BOOL presentWi
 @interface GioView : NSView <CALayerDelegate,NSTextInputClient>
 @property uintptr_t handle;
 @property BOOL presentWithTrans;
+// trafficLights is the height of the title bar the window's buttons are
+// centered in; zero leaves them where AppKit puts them.
+@property CGFloat trafficLights;
 @end
+
+// layoutTrafficLights centers the window's buttons in its view's title bar.
+// AppKit lays the title bar out again on every resize and on leaving full
+// screen, so the delegate calls this after each.
+static void layoutTrafficLights(NSWindow *window) {
+	GioView *view = (GioView *)window.contentView;
+	CGFloat bar = view.trafficLights;
+	// In full screen the buttons live in the title bar AppKit slides down on
+	// hover, which is no place for the app's own band.
+	if (bar == 0 || (window.styleMask & NSWindowStyleMaskFullScreen) != 0) {
+		return;
+	}
+	NSButton *close = [window standardWindowButton:NSWindowCloseButton];
+	NSButton *mini = [window standardWindowButton:NSWindowMiniaturizeButton];
+	NSButton *zoom = [window standardWindowButton:NSWindowZoomButton];
+	NSView *container = close.superview.superview;
+	if (container == nil) {
+		return;
+	}
+	NSRect frame = container.frame;
+	frame.size.height = bar;
+	frame.origin.y = NSHeight(window.frame) - bar;
+	container.frame = frame;
+	CGFloat inset = (bar - NSHeight(close.frame)) / 2;
+	CGFloat step = NSMinX(mini.frame) - NSMinX(close.frame);
+	NSArray<NSButton *> *buttons = @[close, mini, zoom];
+	for (NSUInteger i = 0; i < buttons.count; i++) {
+		[buttons[i] setFrameOrigin:NSMakePoint(inset + i * step, inset)];
+	}
+}
 
 @implementation GioWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow *)window {
@@ -43,6 +76,12 @@ __attribute__ ((visibility ("hidden"))) CALayer *gio_layerFactory(BOOL presentWi
 	NSWindow *window = (NSWindow *)[notification object];
   GioView *view = (GioView *)window.contentView;
 	gio_onDraw(view.handle);
+}
+- (void)windowDidExitFullScreen:(NSNotification *)notification {
+	layoutTrafficLights((NSWindow *)[notification object]);
+}
+- (void)windowDidResize:(NSNotification *)notification {
+	layoutTrafficLights((NSWindow *)[notification object]);
 }
 - (void)windowDidChangeScreen:(NSNotification *)notification {
 	NSWindow *window = (NSWindow *)[notification object];
@@ -462,6 +501,16 @@ CFTypeRef gio_createView(int presentWithTrans) {
 													 name:NSApplicationDidHideNotification
 												   object:nil];
 		return CFBridgingRetain(view);
+	}
+}
+
+void gio_setTrafficLights(CFTypeRef viewRef, CGFloat titleBar) {
+	@autoreleasepool {
+		GioView *view = (__bridge GioView *)viewRef;
+		view.trafficLights = titleBar;
+		if (view.window != nil) {
+			layoutTrafficLights(view.window);
+		}
 	}
 }
 

@@ -1018,14 +1018,15 @@ func Decorated(enabled bool) Option {
 }
 
 // TrafficLights keeps macOS's close, minimize and zoom buttons on a window
-// with Decorated(false), at their place over the window's content, for an
-// app that draws its own title bar around them. Without it an undecorated
-// window has none.
+// with Decorated(false), over the window's content, for an app that draws
+// its own title bar around them: the buttons sit centered in a band titleBar
+// high at the window's top, as far from its left edge as from the band's
+// top. A titleBar of zero, the default, leaves an undecorated window none.
 //
 // TrafficLights is supported on macOS.
-func TrafficLights(enabled bool) Option {
+func TrafficLights(titleBar unit.Dp) Option {
 	return func(_ unit.Metric, cnf *Config) {
-		cnf.TrafficLights = enabled
+		cnf.TrafficLights = titleBar
 	}
 }
 
