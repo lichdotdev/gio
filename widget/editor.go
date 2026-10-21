@@ -1181,6 +1181,26 @@ func (e *Editor) Read(p []byte) (int, error) {
 	return e.text.Read(p)
 }
 
+// ScrollOff returns the scroll offset of the text viewport, in pixels.
+func (e *Editor) ScrollOff() image.Point {
+	e.initBuffer()
+	return e.text.ScrollOff()
+}
+
+// ScrollBounds returns the range ScrollOff can take: the text's size less the
+// viewport's, as of the last Layout.
+func (e *Editor) ScrollBounds() image.Rectangle {
+	e.initBuffer()
+	return e.text.ScrollBounds()
+}
+
+// ScrollRel scrolls the text viewport by dx, dy pixels, clamped to
+// ScrollBounds.
+func (e *Editor) ScrollRel(dx, dy int) {
+	e.initBuffer()
+	e.text.ScrollRel(dx, dy)
+}
+
 // Regions returns visible regions covering the rune range [start,end).
 func (e *Editor) Regions(start, end int, regions []Region) []Region {
 	e.initBuffer()

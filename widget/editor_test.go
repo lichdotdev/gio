@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/quick"
 	"time"
@@ -1405,4 +1406,28 @@ func textWidth(e *Editor, lineNum, colStart, colEnd int) float32 {
 func textBaseline(e *Editor, lineNum int) float32 {
 	start := e.text.closestToLineCol(lineNum, 0)
 	return float32(start.y)
+}
+
+func TestEditorScrollExposed(t *testing.T) {
+	gtx := layout.Context{
+		Ops:         new(op.Ops),
+		Constraints: layout.Exact(image.Pt(100, 40)),
+		Locale:      english,
+	}
+	cache := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
+	e := new(Editor)
+	e.SetText(strings.Repeat("line\n", 20))
+	e.Layout(gtx, cache, font.Font{}, unit.Sp(10), op.CallOp{}, op.CallOp{})
+	b := e.ScrollBounds()
+	if b.Max.Y <= 0 {
+		t.Fatalf("ScrollBounds = %v, want room to scroll down", b)
+	}
+	e.ScrollRel(0, 10)
+	if got := e.ScrollOff().Y; got != 10 {
+		t.Errorf("ScrollOff().Y = %d after ScrollRel(0, 10), want 10", got)
+	}
+	e.ScrollRel(0, b.Max.Y*2)
+	if got := e.ScrollOff().Y; got != b.Max.Y {
+		t.Errorf("ScrollOff().Y = %d past the end, want it clamped to %d", got, b.Max.Y)
+	}
 }
