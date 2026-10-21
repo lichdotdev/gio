@@ -23,8 +23,10 @@ __attribute__ ((visibility ("hidden"))) CALayer *gio_layerFactory(BOOL presentWi
 @end
 
 // layoutTrafficLights centers the window's buttons in its view's title bar.
-// AppKit lays the title bar out again on every resize and on leaving full
-// screen, so the delegate calls this after each.
+// AppKit lays the title bar out again on every resize, on leaving full
+// screen, whenever the window gains or loses key or main status (it becomes
+// key as it first shows) and when the system appearance changes, so the
+// delegate and the view call this after each.
 static void layoutTrafficLights(NSWindow *window) {
 	GioView *view = (GioView *)window.contentView;
 	CGFloat bar = view.trafficLights;
@@ -95,6 +97,7 @@ static void layoutTrafficLights(NSWindow *window) {
 	if ([window firstResponder] == view) {
 		gio_onFocus(view.handle, 1);
 	}
+	layoutTrafficLights(window);
 }
 - (void)windowDidResignKey:(NSNotification *)notification {
 	NSWindow *window = (NSWindow *)[notification object];
@@ -102,6 +105,13 @@ static void layoutTrafficLights(NSWindow *window) {
 	if ([window firstResponder] == view) {
 		gio_onFocus(view.handle, 0);
 	}
+	layoutTrafficLights(window);
+}
+- (void)windowDidBecomeMain:(NSNotification *)notification {
+	layoutTrafficLights((NSWindow *)[notification object]);
+}
+- (void)windowDidResignMain:(NSNotification *)notification {
+	layoutTrafficLights((NSWindow *)[notification object]);
 }
 @end
 
@@ -152,6 +162,15 @@ static NSDragOperation handleDrag(GioView *view, id<NSDraggingInfo> info, int ki
 }
 - (void)viewDidMoveToWindow {
 	gio_onAttached(self.handle, self.window != nil ? 1 : 0);
+}
+// AppKit lays the title bar out for the new appearance after this returns,
+// so the buttons are centered again on the next turn of the main queue.
+- (void)viewDidChangeEffectiveAppearance {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (self.window != nil) {
+			layoutTrafficLights(self.window);
+		}
+	});
 }
 - (void)mouseDown:(NSEvent *)event {
 	handleMouse(self, event, MOUSE_DOWN, 0, 0);
