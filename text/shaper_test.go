@@ -581,3 +581,32 @@ func TestShapeStringRuneAccounting(t *testing.T) {
 		})
 	}
 }
+
+// TestShaperReportsRunesOutsideCollection checks that WithOutsideCollection
+// hears of the runes no face of the collection draws, and of no other.
+func TestShaperReportsRunesOutsideCollection(t *testing.T) {
+	var outside []rune
+	shaper := NewShaper(NoSystemFonts(), WithCollection(gofont.Collection()), WithOutsideCollection(func(r rune) {
+		outside = append(outside, r)
+	}))
+	layout := func(s string) {
+		shaper.LayoutString(Parameters{PxPerEm: fixed.I(16), MaxWidth: 1 << 20}, s)
+		for _, ok := shaper.NextGlyph(); ok; _, ok = shaper.NextGlyph() {
+		}
+	}
+	layout("main, a branch\nand a second line")
+	if len(outside) != 0 {
+		t.Fatalf("text the collection draws reported %q", string(outside))
+	}
+	layout("feat/中文 branch")
+	for _, want := range "中文" {
+		if !slices.Contains(outside, want) {
+			t.Errorf("%c, which no face of the collection draws, was not reported (got %q)", want, string(outside))
+		}
+	}
+	for _, r := range outside {
+		if !strings.ContainsRune("中文", r) {
+			t.Errorf("%q was reported, but the collection draws it", r)
+		}
+	}
+}

@@ -206,7 +206,11 @@ type shaperImpl struct {
 	faceToIndex  map[*font.Font]int
 	faceMeta     []giofont.Font
 	defaultFaces []string
-	logger       interface {
+	// collection are the fonts the shaper was given, and outside is told of a
+	// rune none of them draws (WithOutsideCollection).
+	collection map[*font.Font]bool
+	outside    func(r rune)
+	logger     interface {
 		Printf(format string, args ...any)
 	}
 	parser parser
@@ -246,6 +250,7 @@ func newShaperImpl(systemFonts bool, collection []FontFace) *shaperImpl {
 	shaper.logger = newDebugLogger()
 	shaper.fontMap = fontscan.NewFontMap(shaper.logger)
 	shaper.faceToIndex = make(map[*font.Font]int)
+	shaper.collection = make(map[*font.Font]bool)
 	if systemFonts {
 		str, err := os.UserCacheDir()
 		if err != nil {
@@ -270,6 +275,7 @@ func newShaperImpl(systemFonts bool, collection []FontFace) *shaperImpl {
 func (s *shaperImpl) Load(f FontFace) {
 	desc := opentype.FontToDescription(f.Font)
 	face := f.Face.Face()
+	s.collection[face.Font] = true
 	s.fontMap.AddFace(face, fontscan.Location{File: fmt.Sprint(desc)}, desc)
 	s.addFace(face, f.Font)
 }
@@ -290,6 +296,9 @@ func (s *shaperImpl) addFace(f *font.Face, md giofont.Font) {
 // ids so that they can be referred to by a GlyphID.
 func (s *shaperImpl) ResolveFace(r rune) *font.Face {
 	face := s.fontMap.ResolveFace(r)
+	if s.outside != nil && !s.collectionDraws(face, r) {
+		s.outside(r)
+	}
 	if face != nil {
 		family, aspect := s.fontMap.FontMetadata(face.Font)
 		md := opentype.DescriptionToFont(font.Description{
@@ -300,6 +309,16 @@ func (s *shaperImpl) ResolveFace(r rune) *font.Face {
 		return face
 	}
 	return nil
+}
+
+// collectionDraws reports whether face, the one resolved for r, is a face of
+// the collection that has a glyph for r.
+func (s *shaperImpl) collectionDraws(face *font.Face, r rune) bool {
+	if face == nil || !s.collection[face.Font] {
+		return false
+	}
+	_, ok := face.NominalGlyph(r)
+	return ok
 }
 
 func (s *shaperImpl) SetScript(script language.Script) {

@@ -218,6 +218,7 @@ type Shaper struct {
 	config struct {
 		disableSystemFonts bool
 		collection         []FontFace
+		outside            func(r rune)
 	}
 	initialized      bool
 	shaper           shaperImpl
@@ -253,6 +254,18 @@ func NoSystemFonts() ShaperOption {
 	}
 }
 
+// WithOutsideCollection makes the shaper call outside with each rune it shapes
+// that no face of the collection draws, whatever face it then draws the rune
+// with: a system font, or none. An application can load a face it holds back
+// until text needs it, and build a shaper that has it. outside runs while the
+// shaper lays text out, so it must not call into the shaper; a rune is
+// reported every time text holding it is laid out anew.
+func WithOutsideCollection(outside func(r rune)) ShaperOption {
+	return func(s *Shaper) {
+		s.config.outside = outside
+	}
+}
+
 // WithCollection can be used to provide a collection of pre-loaded fonts to the shaper.
 func WithCollection(collection []FontFace) ShaperOption {
 	return func(s *Shaper) {
@@ -277,6 +290,7 @@ func (l *Shaper) init() {
 	l.initialized = true
 	l.reader = bufio.NewReader(nil)
 	l.shaper = *newShaperImpl(!l.config.disableSystemFonts, l.config.collection)
+	l.shaper.outside = l.config.outside
 }
 
 // Layout text from an io.Reader according to a set of options. Results can be retrieved by
