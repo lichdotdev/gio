@@ -18,7 +18,7 @@ struct drawParams {
 	CGFloat top, right, bottom, left;
 };
 
-static void writeClipboard(unichar *chars, NSUInteger length) {
+static void writeClipboard(unichar *chars, NSUInteger length, int sensitive) {
 #if !TARGET_OS_TV
 	@autoreleasepool {
 		NSString *s = [NSString string];
@@ -26,7 +26,10 @@ static void writeClipboard(unichar *chars, NSUInteger length) {
 			s = [NSString stringWithCharacters:chars length:length];
 		}
 		UIPasteboard *p = UIPasteboard.generalPasteboard;
-		p.string = s;
+		// public.utf8-plain-text is the type p.string uses. Sensitive
+		// content stays on this device, out of Universal Clipboard.
+		NSDictionary *item = @{@"public.utf8-plain-text": s};
+		[p setItems:@[item] options:@{UIPasteboardOptionLocalOnly: @(sensitive != 0)}];
 	}
 #endif
 }
@@ -59,12 +62,9 @@ static struct drawParams viewDrawParams(CFTypeRef viewRef) {
 	// Use 163 as the standard ppi on iOS.
 	params.dpi = 163*scale;
 	params.sdpi = params.dpi;
-	UIEdgeInsets insets = v.layoutMargins;
-	if (@available(iOS 11.0, tvOS 11.0, *)) {
-		UIFontMetrics *metrics = [UIFontMetrics defaultMetrics];
-		params.sdpi = [metrics scaledValueForValue:params.sdpi];
-		insets = v.safeAreaInsets;
-	}
+	UIFontMetrics *metrics = [UIFontMetrics defaultMetrics];
+	params.sdpi = [metrics scaledValueForValue:params.sdpi];
+	UIEdgeInsets insets = v.safeAreaInsets;
 	params.width = v.bounds.size.width*scale;
 	params.height = v.bounds.size.height*scale;
 	params.top = insets.top*scale;
@@ -109,7 +109,6 @@ type window struct {
 	displayLink *displayLink
 	loop        *eventLoop
 
-	hidden bool
 	cursor pointer.Cursor
 	config Config
 
@@ -117,6 +116,12 @@ type window struct {
 }
 
 var mainWindow = newWindowRendezvous()
+
+// inBackground tracks whether the program is in the background, to stop drawing
+// there and to report each change once: UIKit also posts the foreground
+// notification at launch, and every view controller observes both
+// notifications. It is only accessed on the main thread.
+var inBackground bool
 
 func init() {
 	// Darwin requires UI operations happen on the main thread only.
@@ -157,7 +162,7 @@ func gio_onDraw(h C.uintptr_t) {
 }
 
 func (w *window) draw(sync bool) {
-	if w.hidden {
+	if inBackground {
 		return
 	}
 	params := C.viewDrawParams(w.view)
@@ -189,17 +194,22 @@ func (w *window) draw(sync bool) {
 	})
 }
 
-//export onStop
-func onStop(h C.uintptr_t) {
-	w := viewFor(h)
-	w.hidden = true
+//export onEnterBackground
+func onEnterBackground() {
+	if inBackground {
+		return
+	}
+	processGlobalEvent(BackgroundEvent{})
+	inBackground = true
 }
 
-//export onStart
-func onStart(h C.uintptr_t) {
-	w := viewFor(h)
-	w.hidden = false
-	w.draw(true)
+//export onEnterForeground
+func onEnterForeground() {
+	if !inBackground {
+		return
+	}
+	processGlobalEvent(ForegroundEvent{})
+	inBackground = false
 }
 
 //export onDestroy
@@ -296,10 +306,14 @@ func (w *window) ReadClipboard() {
 	})
 }
 
-func (w *window) WriteClipboard(mime string, s []byte) {
-	u16 := utf16.Encode([]rune(string(s)))
+func (w *window) WriteClipboard(c clipboardContent) {
+	u16 := utf16.Encode([]rune(string(c.data)))
 	chars := (*C.unichar)(unsafe.Pointer(unsafe.SliceData(u16)))
-	C.writeClipboard(chars, C.NSUInteger(len(u16)))
+	var sens C.int
+	if c.sensitive {
+		sens = 1
+	}
+	C.writeClipboard(chars, C.NSUInteger(len(u16)), sens)
 }
 
 func (w *window) Configure([]Option) {
@@ -378,6 +392,10 @@ func (w *window) Invalidate() {
 }
 
 func (w *window) Run(f func()) {
+	if isMainThread() {
+		f()
+		return
+	}
 	w.loop.Run(f)
 }
 

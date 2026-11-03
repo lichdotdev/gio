@@ -196,7 +196,7 @@ type driver interface {
 	// ReadClipboard requests the clipboard content.
 	ReadClipboard()
 	// WriteClipboard requests a clipboard write.
-	WriteClipboard(mime string, s []byte)
+	WriteClipboard(c clipboardContent)
 	// Configure the window.
 	Configure([]Option)
 	// SetCursor updates the current cursor to name.
@@ -211,6 +211,15 @@ type driver interface {
 	Frame(frame *op.Ops)
 	// ProcessEvent processes an event.
 	ProcessEvent(e event.Event)
+}
+
+// clipboardContent is the content of a clipboard write.
+type clipboardContent struct {
+	mime string
+	data []byte
+	// sensitive marks data for clipboard managers where the platform
+	// supports it, see [gioui.org/io/clipboard.WriteCmd].
+	sensitive bool
 }
 
 type windowRendezvous struct {

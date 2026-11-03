@@ -55,17 +55,11 @@ CGFloat _keyboardHeight;
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
-	GioView *view = (GioView *)self.view.subviews[0];
-	if (view != nil) {
-		onStart(view.handle);
-	}
+	onEnterForeground();
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-	GioView *view = (GioView *)self.view.subviews[0];
-	if (view != nil) {
-		onStop(view.handle);
-	}
+	onEnterBackground();
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -133,11 +127,7 @@ NSArray<UIKeyCommand *> *_keyCommands;
 }
 - (void)willMoveToWindow:(UIWindow *)newWindow {
 	self.contentScaleFactor = newWindow.screen.nativeScale;
-    if (@available(iOS 13.0, *)) {
-        [self registerSceneNotifications:newWindow];
-    }else{
-        [self registerWindowNotifications:newWindow];
-    }
+	[self registerSceneNotifications:newWindow];
 }
 
 - (void)registerSceneNotifications:(UIWindow *)newWindow {
@@ -160,43 +150,12 @@ NSArray<UIKeyCommand *> *_keyCommands;
                                               object:newWindow.windowScene];
 }
 
-- (void)onSceneDidActivate:(NSNotification *)note API_AVAILABLE(ios(13.0)){
+- (void)onSceneDidActivate:(NSNotification *)note {
     onFocus(self.handle, YES);
 }
 
-- (void)onSceneWillDeactivate:(NSNotification *)note API_AVAILABLE(ios(13.0)){
+- (void)onSceneWillDeactivate:(NSNotification *)note {
     onFocus(self.handle, NO);
-}
-
-- (void)registerWindowNotifications:(UIWindow *)newWindow {
-	if (self.window != nil) {
-		[[NSNotificationCenter defaultCenter] removeObserver:self
-											  name:UIWindowDidBecomeKeyNotification
-										      object:self.window];
-		[[NSNotificationCenter defaultCenter] removeObserver:self
-											  name:UIWindowDidResignKeyNotification
-											  object:self.window];
-	}
-	[[NSNotificationCenter defaultCenter] addObserver:self
-										  selector:@selector(onWindowDidBecomeKey:)
-										  name:UIWindowDidBecomeKeyNotification
-										  object:newWindow];
-	[[NSNotificationCenter defaultCenter] addObserver:self
-										  selector:@selector(onWindowDidResignKey:)
-										  name:UIWindowDidResignKeyNotification
-										  object:newWindow];
-}
-
-- (void)onWindowDidBecomeKey:(NSNotification *)note {
-	if (self.isFirstResponder) {
-		onFocus(self.handle, YES);
-	}
-}
-
-- (void)onWindowDidResignKey:(NSNotification *)note {
-	if (self.isFirstResponder) {
-		onFocus(self.handle, NO);
-	}
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -315,21 +274,53 @@ void gio_viewSetHandle(CFTypeRef viewRef, uintptr_t handle) {
 	v.handle = handle;
 }
 
-@interface _gioAppDelegate : UIResponder <UIApplicationDelegate>
+// sceneWindow is the window of the scene life cycle. It outlives a
+// scene that UIKit disconnects, because there is only one Gio window
+// and its GioViewController cannot be created a second time.
+static UIWindow *sceneWindow;
+
+@interface _gioSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @end
 
-@implementation _gioAppDelegate
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-	self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
-	GioViewController *controller = [[GioViewController alloc] initWithNibName:nil bundle:nil];
-	self.window.rootViewController = controller;
+@implementation _gioSceneDelegate
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+	if (![scene isKindOfClass:[UIWindowScene class]] || ![session.role isEqualToString:UIWindowSceneSessionRoleApplication]) {
+		return;
+	}
+	UIWindowScene *windowScene = (UIWindowScene *)scene;
+	if (sceneWindow == nil) {
+		sceneWindow = [[UIWindow alloc] initWithWindowScene:windowScene];
+		GioViewController *controller = [[GioViewController alloc] initWithNibName:nil bundle:nil];
+		sceneWindow.rootViewController = controller;
+	} else {
+		sceneWindow.windowScene = windowScene;
+	}
+	self.window = sceneWindow;
 	[self.window makeKeyAndVisible];
-	return YES;
+	[self scene:scene openURLContexts:connectionOptions.URLContexts];
 }
-- (BOOL)application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options {
-    gio_onOpenURI((__bridge CFTypeRef)url.absoluteString);
-	return YES;
+
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
+	for (UIOpenURLContext *context in URLContexts) {
+		gio_onOpenURI((__bridge CFTypeRef)context.URL.absoluteString);
+	}
+}
+@end
+
+@interface _gioAppDelegate : UIResponder <UIApplicationDelegate>
+@end
+
+@implementation _gioAppDelegate
+// The scene manifest in the Info.plist needs no scene configurations:
+// the main scene gets _gioSceneDelegate unless the Info.plist configures
+// a delegate for it.
+- (UISceneConfiguration *)application:(UIApplication *)application configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession options:(UISceneConnectionOptions *)options {
+	UISceneConfiguration *config = [connectingSceneSession.configuration copy];
+	if (config.delegateClass == nil && [connectingSceneSession.role isEqualToString:UIWindowSceneSessionRoleApplication]) {
+		config.delegateClass = [_gioSceneDelegate class];
+	}
+	return config;
 }
 @end
 
