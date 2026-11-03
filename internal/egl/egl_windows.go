@@ -185,3 +185,11 @@ func eglWaitClient() bool {
 func issue34474KeepAlive(v any) {
 	runtime.KeepAlive(v)
 }
+
+func eglLoadSwapBuffersWithDamage() bool { return false }
+
+func eglSwapBuffersWithDamage(disp _EGLDisplay, surf _EGLSurface, rects []_EGLint) bool { return false }
+
+func eglQuerySurface(disp _EGLDisplay, surf _EGLSurface, attr _EGLint) (_EGLint, bool) {
+	return 0, false
+}

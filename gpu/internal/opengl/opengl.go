@@ -41,6 +41,12 @@ type Backend struct {
 
 	outputFBO gl.Framebuffer
 	sRGBFBO   *SRGBFBO
+	// scissor is the rectangle drawing is limited to, in the pass's
+	// top-left coordinates; passHeight flips it into OpenGL's. A scissor set
+	// between passes takes effect as the next one begins, before its clear.
+	scissor    image.Rectangle
+	passHeight int
+	outputPass bool
 
 	// vertArray is bound during a frame. We don't need it, but
 	// core desktop OpenGL profile 3.3 requires some array bound.
@@ -870,8 +876,28 @@ func toGLDrawMode(mode driver.Topology) gl.Enum {
 	}
 }
 
+// Scissor clips drawing to r, flipped into OpenGL's bottom-left origin
+// against the height of the pass.
+func (b *Backend) Scissor(r image.Rectangle) {
+	b.scissor = r
+	b.applyScissor()
+}
+
+func (b *Backend) applyScissor() {
+	r := b.scissor
+	if r.Empty() {
+		b.funcs.Disable(gl.SCISSOR_TEST)
+		return
+	}
+	b.funcs.Enable(gl.SCISSOR_TEST)
+	b.funcs.Scissor(int32(r.Min.X), int32(b.passHeight-r.Max.Y), int32(r.Dx()), int32(r.Dy()))
+}
+
 func (b *Backend) Viewport(x, y, width, height int) {
 	b.glstate.setViewport(b.funcs, x, y, width, height)
+	if b.passHeight == 0 || b.outputPass {
+		b.passHeight = height
+	}
 }
 
 func (b *Backend) clearOutput(colR, colG, colB, colA float32) {
@@ -1196,8 +1222,14 @@ func (b *Backend) EndCompute() {
 }
 
 func (b *Backend) BeginRenderPass(tex driver.Texture, desc driver.LoadDesc) {
-	fbo := tex.(*texture).ensureFBO()
+	t := tex.(*texture)
+	fbo := t.ensureFBO()
 	b.glstate.bindFramebuffer(b.funcs, gl.FRAMEBUFFER, fbo)
+	b.passHeight, b.outputPass = t.height, t.foreign
+	if t.foreign {
+		b.passHeight = b.glstate.viewport[3]
+	}
+	b.applyScissor()
 	switch desc.Action {
 	case driver.LoadActionClear:
 		c := desc.ClearColor

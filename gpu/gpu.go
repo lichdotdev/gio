@@ -47,7 +47,8 @@ type GPU interface {
 }
 
 type gpu struct {
-	cache *textureCache
+	cache  *textureCache
+	damage damageTracker
 
 	profile                                string
 	timers                                 *timers
@@ -59,6 +60,9 @@ type gpu struct {
 }
 
 type renderer struct {
+	// damage is the rectangle of the viewport being drawn, when the frame
+	// is drawn in parts; empty draws everything.
+	damage        image.Rectangle
 	ctx           driver.Device
 	blitter       *blitter
 	pather        *pather
@@ -129,6 +133,7 @@ type pathOp struct {
 	// previous clip bounds.
 	intersect f32.Rectangle
 	pathKey   opKey
+	hash      uint64
 	path      bool
 	pathVerts []byte
 	parent    *pathOp
@@ -157,6 +162,10 @@ func decodeStrokeOp(data []byte) float32 {
 type quadsOp struct {
 	key opKey
 	aux []byte
+	// hash is the path's content hash, from its TypePath op: what tells
+	// the same path apart from another across frames, whichever op.Ops
+	// either was recorded in.
+	hash uint64
 }
 
 type opKey struct {
@@ -378,8 +387,18 @@ func (g *gpu) Release() {
 
 func (g *gpu) Frame(frameOps *op.Ops, target RenderTarget, viewport image.Point) error {
 	g.collect(viewport, frameOps)
+	g.damage.frame(g.drawOps.imageOps, g.drawOps.layers, viewport, g.drawOps.clear, g.drawOps.clearColor)
 	return g.frame(target)
 }
+
+// SetBufferAge is how many frames old the buffer the next Frame draws into
+// is, from EGL_EXT_buffer_age: 1 is the frame just shown. With it, Frame
+// draws only what changed since that buffer was shown; 0 draws everything.
+func (g *gpu) SetBufferAge(age int) { g.damage.setAge(age) }
+
+// Damage is the part of the viewport the last Frame drew, for the window
+// to pass on as the surface's damage.
+func (g *gpu) Damage() []image.Rectangle { return g.damage.region }
 
 func (g *gpu) collect(viewport image.Point, frameOps *op.Ops) {
 	g.renderer.blitter.viewport = viewport
@@ -403,6 +422,23 @@ func (g *gpu) frame(target RenderTarget) error {
 	for _, img := range g.drawOps.imageOps {
 		expandPathOp(img.path, img.clip)
 	}
+	if !g.damage.full {
+		// A layer is drawn whole into its own texture, so its paths stay
+		// whatever the frame's rectangles.
+		inLayer := map[*pathOp]bool{}
+		for _, l := range g.drawOps.layers {
+			for _, img := range g.drawOps.imageOps[l.opStart:l.opEnd] {
+				for p := img.path; p != nil; p = p.parent {
+					inLayer[p] = true
+				}
+			}
+		}
+		for _, p := range g.drawOps.pathOps {
+			if !inLayer[p] && !overlapsAny(g.damage.region, p.clip) {
+				p.clip = image.Rectangle{}
+			}
+		}
+	}
 	g.stencilTimer.begin()
 	g.renderer.packStencils(&g.drawOps.pathOps)
 	g.renderer.stencilClips(g.drawOps.pathCache, g.drawOps.pathOps)
@@ -420,11 +456,30 @@ func (g *gpu) frame(target RenderTarget) error {
 	}
 	if g.drawOps.clear {
 		g.drawOps.clear = false
-		d.Action = driver.LoadActionClear
+		if g.damage.full {
+			d.Action = driver.LoadActionClear
+		}
 	}
 	g.ctx.BeginRenderPass(defFBO, d)
 	g.ctx.Viewport(0, 0, viewport.X, viewport.Y)
-	g.renderer.drawOps(false, image.Point{}, g.renderer.blitter.viewport, g.drawOps.imageOps)
+	if g.damage.full {
+		g.renderer.damage = image.Rectangle{}
+		g.renderer.drawOps(false, image.Point{}, g.renderer.blitter.viewport, g.drawOps.imageOps)
+	} else {
+		// The clear the frame skipped is painted under each rectangle: the
+		// window's canvas, when it is a fill of the whole viewport, is that
+		// clear and no op of its own.
+		ground := []imageOp{{clip: image.Rectangle{Max: viewport}, material: material{material: materialColor, color: g.damage.clearColor, opaque: true, opacity: 1}}}
+		for _, rc := range g.damage.region {
+			g.ctx.Scissor(rc)
+			g.renderer.damage = rc
+			if g.damage.cleared {
+				g.renderer.drawOps(false, image.Point{}, g.renderer.blitter.viewport, ground)
+			}
+			g.renderer.drawOps(false, image.Point{}, g.renderer.blitter.viewport, g.drawOps.imageOps)
+		}
+		g.ctx.Scissor(image.Rectangle{})
+	}
 	g.coverTimer.end()
 	g.ctx.EndRenderPass()
 	g.cleanupTimer.begin()
@@ -677,7 +732,14 @@ func (r *renderer) stencilClips(pathCache *opCache, ops []*pathOp) {
 			}
 			fbo = p.place.Idx
 			f := r.pather.stenciler.cover(fbo)
+			// The atlas keeps its largest size; a frame drawn in part packs
+			// a corner of it, and clears that corner alone. Paths are placed
+			// from the texture's bottom left, the viewport's origin, which
+			// in Scissor's top-left terms is the bottom rows.
+			packed := r.packer.sizes[fbo]
+			r.ctx.Scissor(image.Rect(0, f.size.Y-packed.Y, packed.X, f.size.Y))
 			r.ctx.BeginRenderPass(f.tex, driver.LoadDesc{Action: driver.LoadActionClear})
+			r.ctx.Scissor(image.Rectangle{})
 			r.ctx.BindPipeline(r.pather.stenciler.pipeline.pipeline.pipeline)
 			r.ctx.BindIndexBuffer(r.pather.stenciler.indexBuf)
 		}
@@ -927,7 +989,7 @@ func (d *drawOps) newPathOp() *pathOp {
 	return &d.pathOpCache[len(d.pathOpCache)-1]
 }
 
-func (d *drawOps) addClipPath(state *drawState, aux []byte, auxKey opKey, bounds f32.Rectangle, off f32.Point) {
+func (d *drawOps) addClipPath(state *drawState, aux []byte, auxKey opKey, hash uint64, bounds f32.Rectangle, off f32.Point) {
 	npath := d.newPathOp()
 	*npath = pathOp{
 		parent:    state.cpath,
@@ -943,6 +1005,7 @@ func (d *drawOps) addClipPath(state *drawState, aux []byte, auxKey opKey, bounds
 	if len(aux) > 0 {
 		npath.rect = false
 		npath.pathKey = auxKey
+		npath.hash = hash
 		npath.path = true
 		npath.pathVerts = aux
 		d.pathOps = append(d.pathOps, npath)
@@ -1019,6 +1082,7 @@ loop:
 			quads.key.strokeWidth = decodeStrokeOp(encOp.Data)
 
 		case ops.TypePath:
+			quads.hash = binary.LittleEndian.Uint64(encOp.Data[1:])
 			encOp, ok = r.Decode()
 			if !ok {
 				break loop
@@ -1056,7 +1120,7 @@ loop:
 				quads.key = opKey{Key: encOp.Key}
 				quads.key = quads.key.SetTransform(trans)
 			}
-			d.addClipPath(&state, quads.aux, quads.key, bounds, off)
+			d.addClipPath(&state, quads.aux, quads.key, quads.hash, bounds, off)
 			quads = quadsOp{}
 		case ops.TypePopClip:
 			state.cpath = state.cpath.parent
@@ -1101,7 +1165,7 @@ loop:
 				// this transformed rectangle.
 				k := opKey{Key: encOp.Key}
 				k = k.SetTransform(t)
-				d.addClipPath(&state, clipData, k, bnd, off)
+				d.addClipPath(&state, clipData, k, 0, bnd, off)
 			}
 
 			bounds := cl.Round()
@@ -1243,6 +1307,9 @@ func (r *renderer) drawOps(isFBO bool, opOff, viewport image.Point, ops []imageO
 			r.ctx.BindTexture(0, m.tex)
 		}
 		drc := img.clip.Add(opOff)
+		if !isFBO && !r.damage.Empty() && !drc.Overlaps(r.damage) {
+			continue
+		}
 
 		scale, off := clipSpaceTransform(drc, viewport)
 		var fbo FBO

@@ -35,6 +35,10 @@ type Device interface {
 	DrawElements(off, count int)
 
 	BeginRenderPass(t Texture, desc LoadDesc)
+	// Scissor limits drawing in the current render pass to r, in the
+	// pass's pixel coordinates with the origin at the top left; an empty
+	// r lifts the limit.
+	Scissor(r image.Rectangle)
 	EndRenderPass()
 	PrepareTexture(t Texture)
 	BindProgram(p Program)

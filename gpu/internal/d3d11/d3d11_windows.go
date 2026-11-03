@@ -869,3 +869,7 @@ func toBlendFactor(f driver.BlendFactor) (uint32, uint32) {
 func sliceOf(ptr uintptr, cap int) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(ptr)), cap)
 }
+
+// Scissor is not implemented: a frame is drawn in part only where the
+// window reports its buffer age, which only the EGL context does.
+func (b *Backend) Scissor(image.Rectangle) {}

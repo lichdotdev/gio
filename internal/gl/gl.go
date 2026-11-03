@@ -33,6 +33,7 @@ const (
 	DEPTH_COMPONENT32F                    = 0x8CAC
 	DEPTH_FUNC                            = 0x0B74
 	DEPTH_TEST                            = 0xb71
+	SCISSOR_TEST                          = 0xc11
 	DEPTH_WRITEMASK                       = 0x0B72
 	DRAW_FRAMEBUFFER                      = 0x8CA9
 	DST_COLOR                             = 0x306
