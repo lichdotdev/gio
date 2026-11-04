@@ -4,10 +4,18 @@ package gpu
 
 import (
 	"image"
+	"os"
 	"testing"
 
 	"gioui.org/internal/f32color"
 )
+
+// TestMain draws in part, as GIO_DAMAGE=on does: the tracker's diff is what
+// these tests are about.
+func TestMain(m *testing.M) {
+	damageOn = true
+	os.Exit(m.Run())
+}
 
 func colorOp(r image.Rectangle, c f32color.RGBA) imageOp {
 	return imageOp{clip: r, material: material{material: materialColor, color: c, opaque: true, opacity: 1}}
@@ -109,5 +117,17 @@ func TestAFadingLayerDirtiesItsRectangle(t *testing.T) {
 	tr.frame(ops, []opacityLayer{{opacity: 0.5, clip: layer}}, view, true, blue)
 	if tr.full || len(tr.region) != 1 || tr.region[0] != layer {
 		t.Fatalf("a layer fading dirtied %v (full %v), want its rectangle %v", tr.region, tr.full, layer)
+	}
+}
+
+func TestWithoutGIODamageEveryFrameIsWhole(t *testing.T) {
+	damageOn = false
+	t.Cleanup(func() { damageOn = true })
+	tr := freshTracker()
+	ops := []imageOp{colorOp(image.Rect(0, 0, 10, 10), red)}
+	frameAt(tr, 1, ops, view, blue)
+	frameAt(tr, 1, ops, view, blue)
+	if !tr.full {
+		t.Fatal("without GIO_DAMAGE=on a frame must be drawn whole, whatever the buffer age")
 	}
 }

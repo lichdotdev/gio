@@ -122,7 +122,7 @@ func (t *damageTracker) frame(ops []imageOp, layers []opacityLayer, viewport ima
 		dirty[i] = dirty[i].Intersect(whole)
 	}
 	first := t.prev == nil || len(t.prev) == 0 && t.frames == 0
-	t.full = damageOff || first || t.age <= 0 || t.age > len(t.history)+1 || viewport != t.viewport || cleared != t.cleared || clearColor != t.clearColor
+	t.full = !damageOn || first || t.age <= 0 || t.age > len(t.history)+1 || viewport != t.viewport || cleared != t.cleared || clearColor != t.clearColor
 	t.cleared, t.clearColor = cleared, clearColor
 	t.viewport = viewport
 	t.region = append(t.region[:0], dirty...)
@@ -140,9 +140,11 @@ func (t *damageTracker) frame(ops []imageOp, layers []opacityLayer, viewport ima
 	t.age = 0
 }
 
-// damageOff draws every frame whole, the way Gio does upstream: GIO_DAMAGE=off
-// in the environment, for a driver that mishandles a frame drawn in part.
-var damageOff = os.Getenv("GIO_DAMAGE") == "off"
+// damageOn draws a frame in part where the buffer age allows: GIO_DAMAGE=on
+// in the environment. Off, every frame is drawn whole, the way Gio does
+// upstream. It is opt-in because a driver can report an age its buffer does
+// not hold, and the frame then shows stale pixels: NVIDIA 595 on COSMIC does.
+var damageOn = os.Getenv("GIO_DAMAGE") == "on"
 
 // damageRects bounds how many rectangles a frame is drawn in: past it,
 // the rectangles fold into their bounding box.
