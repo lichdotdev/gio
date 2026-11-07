@@ -51,6 +51,7 @@ type opSig struct {
 	uvTrans  f32.Affine2D
 	paths    [4]pathSig
 	depth    int
+	shape    shapeOp
 }
 
 // pathSig identifies one clip of the stack by what it clips to, never by
@@ -71,6 +72,7 @@ func sigOf(img *imageOp) opSig {
 		clipType: img.clipType, clip: img.clip, layerOps: img.layerOps,
 		mat: m.material, opaque: m.opaque, color: m.color, color1: m.color1, color2: m.color2,
 		opacity: m.opacity, handle: m.data.handle, tex: m.tex, uvTrans: m.uvTrans,
+		shape: img.shape,
 	}
 	for p := img.path; p != nil; p = p.parent {
 		if s.depth < len(s.paths) {

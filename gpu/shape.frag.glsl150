@@ -1,0 +1,104 @@
+#version 150
+
+struct Shape
+{
+    vec4 color;
+    vec4 geom;
+    vec4 radii;
+    vec4 style;
+};
+
+uniform Shape _shape;
+
+// dir is v's direction, any where v has none.
+vec2 dir(vec2 v)
+{
+    float l = length(v);
+    return l > 0.0 ? v / l : vec2(1.0, 0.0);
+}
+
+// sdRRect is the distance from p to the rounded rectangle of half size b
+// and radii r (SE, NE, SW, NW) around the origin, and its normal there.
+vec3 sdRRect(vec2 p, vec2 b, vec4 r)
+{
+    r.xy = (p.x > 0.0) ? r.xy : r.zw;
+    r.x = (p.y > 0.0) ? r.x : r.y;
+    vec2 q = abs(p) - b + r.x;
+    float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r.x;
+    vec2 n = (q.x > 0.0 && q.y > 0.0) ? dir(q) : (q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+    return vec3(d, n);
+}
+
+// sdArc is the distance from p to the arc of radius around the origin
+// from start through sweep, and its normal there.
+vec3 sdArc(vec2 p, float radius, float start, float sweep)
+{
+    float a = mod(atan(p.y, p.x) - start, 6.28318530718);
+    if (a <= sweep)
+    {
+        return vec3(abs(length(p) - radius), dir(p));
+    }
+    vec2 s = p - radius * vec2(cos(start), sin(start));
+    vec2 e = p - radius * vec2(cos(start + sweep), sin(start + sweep));
+    vec2 v = dot(s, s) < dot(e, e) ? s : e;
+    return vec3(length(v), dir(v));
+}
+
+// cover is the area of the pixel on the inner side of a straight edge at
+// distance d from the pixel's center, with normal n: the box filter the
+// path stencil computes.
+float cover(float d, vec2 n)
+{
+    n = abs(n);
+    float a = max(n.x, n.y);
+    float b = min(n.x, n.y);
+    float p = 0.5 * (a + b);
+    float q = 0.5 * (a - b);
+    float t = -d;
+    if (t <= -p)
+    {
+        return 0.0;
+    }
+    if (t >= p)
+    {
+        return 1.0;
+    }
+    if (t < -q)
+    {
+        return (t + p) * (t + p) / (2.0 * a * b);
+    }
+    if (t > q)
+    {
+        return 1.0 - (p - t) * (p - t) / (2.0 * a * b);
+    }
+    return 0.5 + t / a;
+}
+
+float coverage(vec2 p)
+{
+    vec3 s;
+    float h = _shape.style.y;
+    if (_shape.style.x == 2.0)
+    {
+        s = sdArc(p, _shape.geom.z, _shape.radii.x, _shape.radii.y);
+        h = _shape.geom.w;
+    }
+    else
+    {
+        s = sdRRect(p, _shape.geom.zw, _shape.radii);
+    }
+    if (_shape.style.x == 0.0)
+    {
+        return cover(s.x, s.yz);
+    }
+    return cover(s.x - h, s.yz) - cover(s.x + h, s.yz);
+}
+
+out vec4 fragColor;
+in vec2 vUV;
+in float opacity;
+
+void main()
+{
+    fragColor = _shape.color * (opacity * coverage(vUV - _shape.geom.xy));
+}

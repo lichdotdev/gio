@@ -70,6 +70,7 @@ type renderer struct {
 	intersections packer
 	layers        packer
 	layerFBOs     fboSet
+	shaper        *shaper
 }
 
 type drawOps struct {
@@ -87,6 +88,9 @@ type drawOps struct {
 	pathOpCache  []pathOp
 	qs           quadSplitter
 	pathCache    *opCache
+	// shapes is whether the renderer draws a clip.RRect or clip.Arc
+	// clip as a shapeOp.
+	shapes bool
 }
 
 type opacityLayer struct {
@@ -138,6 +142,11 @@ type pathOp struct {
 	pathVerts []byte
 	parent    *pathOp
 	place     placement
+	// shape is the clip as a shapeOp, with quads and trans to build its
+	// path when a paint under it cannot be drawn as one.
+	shape shapeOp
+	quads quadsOp
+	trans f32.Affine2D
 }
 
 type imageOp struct {
@@ -151,6 +160,8 @@ type imageOp struct {
 	// layerOps is the number of operations this
 	// operation replaces.
 	layerOps int
+	// shape, when set, is the clip the op covers instead of path.
+	shape shapeOp
 }
 
 func decodeStrokeOp(data []byte) float32 {
@@ -166,6 +177,8 @@ type quadsOp struct {
 	// the same path apart from another across frames, whichever op.Ops
 	// either was recorded in.
 	hash uint64
+	// args are the shape's, from its TypeShape op.
+	args [ops.ShapeArgs]float32
 }
 
 type opKey struct {
@@ -367,6 +380,7 @@ func newGPU(ctx driver.Device) *gpu {
 	g.ctx = ctx
 	g.drawOps.pathCache = newOpCache()
 	g.renderer = newRenderer(ctx)
+	g.drawOps.shapes = g.renderer.shaper != nil
 	return g
 }
 
@@ -553,6 +567,7 @@ func newRenderer(ctx driver.Device) *renderer {
 		ctx:     ctx,
 		blitter: newBlitter(ctx),
 		pather:  newPather(ctx),
+		shaper:  newShaper(ctx),
 	}
 
 	maxDim := ctx.Caps().MaxTextureSize
@@ -572,6 +587,7 @@ func newRenderer(ctx driver.Device) *renderer {
 func (r *renderer) release() {
 	r.pather.release()
 	r.blitter.release()
+	r.shaper.release()
 	r.layerFBOs.delete(r.ctx, 0)
 }
 
@@ -617,6 +633,15 @@ func (b *blitter) release() {
 	}
 }
 
+// blitLayout is the layout of blitter.quadVerts: a position and a uv.
+var blitLayout = driver.VertexLayout{
+	Inputs: []driver.InputDesc{
+		{Type: shader.DataTypeFloat, Size: 2, Offset: 0},
+		{Type: shader.DataTypeFloat, Size: 2, Offset: 4 * 2},
+	},
+	Stride: 4 * 4,
+}
+
 func createColorPrograms(b driver.Device, vsSrc shader.Sources, fsSrc [3]shader.Sources, uniforms [3][]byte) (pipelines [2][3]*pipeline, err error) {
 	defer func() {
 		if err != nil {
@@ -633,13 +658,7 @@ func createColorPrograms(b driver.Device, vsSrc shader.Sources, fsSrc [3]shader.
 		SrcFactor: driver.BlendFactorOne,
 		DstFactor: driver.BlendFactorOneMinusSrcAlpha,
 	}
-	layout := driver.VertexLayout{
-		Inputs: []driver.InputDesc{
-			{Type: shader.DataTypeFloat, Size: 2, Offset: 0},
-			{Type: shader.DataTypeFloat, Size: 2, Offset: 4 * 2},
-		},
-		Stride: 4 * 4,
-	}
+	layout := blitLayout
 	vsh, err := b.NewVertexShader(vsSrc)
 	if err != nil {
 		return pipelines, err
@@ -1013,6 +1032,57 @@ func (d *drawOps) addClipPath(state *drawState, aux []byte, auxKey opKey, hash u
 	state.cpath = npath
 }
 
+// clipVerts builds the vertices of q's path under trans into q.aux, unless
+// the cache holds them, and returns the path's bounds. The cache keeps them
+// without GPU data so that the transform can be reused.
+func (d *drawOps) clipVerts(q *quadsOp, trans f32.Affine2D) f32.Rectangle {
+	q.key = q.key.SetTransform(trans)
+	if v, ok := d.pathCache.get(q.key); ok {
+		// Since the GPU data exists in the cache aux will not be used.
+		return v.bounds
+	}
+	var bounds f32.Rectangle
+	q.aux, bounds = d.buildVerts(q.aux, trans, q.key.outline, q.key.strokeWidth)
+	d.pathCache.put(q.key, opCacheValue{bounds: bounds})
+	return bounds
+}
+
+// addShapeClip pushes a clip drawn as sh, of bounds in trans' space, and
+// keeps q to build its path should a paint under it need one.
+func (d *drawOps) addShapeClip(state *drawState, q quadsOp, trans f32.Affine2D, sh shapeOp, bounds f32.Rectangle, off f32.Point) {
+	sh.geom[0] += off.X
+	sh.geom[1] += off.Y
+	npath := d.newPathOp()
+	*npath = pathOp{
+		parent:    state.cpath,
+		bounds:    bounds,
+		off:       off,
+		intersect: bounds.Add(off),
+		hash:      q.hash,
+		shape:     sh,
+		quads:     q,
+		trans:     trans,
+	}
+	if npath.parent != nil {
+		npath.intersect = npath.parent.intersect.Intersect(npath.intersect)
+	}
+	state.cpath = npath
+}
+
+// buildShapePaths turns the shape clips of the stack p tops into paths,
+// for a paint the shaper cannot draw.
+func (d *drawOps) buildShapePaths(p *pathOp) {
+	for ; p != nil; p = p.parent {
+		if p.shape.kind == shapeNone || p.path {
+			continue
+		}
+		q := p.quads
+		d.clipVerts(&q, p.trans)
+		p.path, p.pathKey, p.pathVerts = true, q.key, q.aux
+		d.pathOps = append(d.pathOps, p)
+	}
+}
+
 func (d *drawOps) save(id int, state f32.Affine2D) {
 	if extra := id - len(d.states) + 1; extra > 0 {
 		for range extra {
@@ -1080,6 +1150,8 @@ loop:
 
 		case ops.TypeStroke:
 			quads.key.strokeWidth = decodeStrokeOp(encOp.Data)
+		case ops.TypeShape:
+			quads.args = ops.DecodeShape(encOp.Data)
 
 		case ops.TypePath:
 			quads.hash = binary.LittleEndian.Uint64(encOp.Data[1:])
@@ -1096,25 +1168,13 @@ loop:
 			quads.key.outline = op.Outline
 			bounds := f32.FRect(op.Bounds)
 			trans, off := transformOffset(state.t)
+			if sh, sb, ok := shapeFor(op.Shape, quads.args, op.Outline, quads.key.strokeWidth, trans); ok && d.shapes && len(quads.aux) > 0 {
+				d.addShapeClip(&state, quads, trans, sh, sb, off)
+				quads = quadsOp{}
+				continue
+			}
 			if len(quads.aux) > 0 {
-				// There is a clipping path, build the gpu data and update the
-				// cache key such that it will be equal only if the transform is the
-				// same also. Use cached data if we have it.
-				quads.key = quads.key.SetTransform(trans)
-				if v, ok := d.pathCache.get(quads.key); ok {
-					// Since the GPU data exists in the cache aux will not be used.
-					// Why is this not used for the offset shapes?
-					bounds = v.bounds
-				} else {
-					var pathData []byte
-					pathData, bounds = d.buildVerts(
-						quads.aux, trans, quads.key.outline, quads.key.strokeWidth,
-					)
-					quads.aux = pathData
-					// add it to the cache, without GPU data, so the transform can be
-					// reused.
-					d.pathCache.put(quads.key, opCacheValue{bounds: bounds})
-				}
+				bounds = d.clipVerts(&quads, trans)
 			} else {
 				quads.aux, bounds, _ = d.boundsForTransformedRect(bounds, trans)
 				quads.key = opKey{Key: encOp.Key}
@@ -1159,6 +1219,14 @@ loop:
 			if cl.Empty() {
 				continue
 			}
+			var shape shapeOp
+			if p := state.cpath; p != nil && p.shape.kind != shapeNone && state.matType == materialColor && (p.parent == nil || p.parent.rect) {
+				// A color paints the whole plane, so the shape alone bounds
+				// it, whatever t does to the paint's rectangle.
+				shape, clipData = p.shape, nil
+			} else {
+				d.buildShapePaths(state.cpath)
+			}
 
 			if clipData != nil {
 				// The paint operation is sheared or rotated, add a clip path representing
@@ -1184,6 +1252,10 @@ loop:
 				path:     state.cpath,
 				clip:     bounds,
 				material: mat,
+				shape:    shape,
+			}
+			if shape.kind != shapeNone {
+				img.path = state.cpath.parent
 			}
 			if n := len(d.opacityStack); n > 0 {
 				idx := d.opacityStack[n-1]
@@ -1312,6 +1384,10 @@ func (r *renderer) drawOps(isFBO bool, opOff, viewport image.Point, ops []imageO
 		}
 
 		scale, off := clipSpaceTransform(drc, viewport)
+		if img.shape.kind != shapeNone {
+			r.shaper.draw(r.ctx, r.blitter.quadVerts, img, isFBO, scale, off)
+			continue
+		}
 		var fbo FBO
 		fboIdx := 0
 		if isFBO {

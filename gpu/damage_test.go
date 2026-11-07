@@ -131,3 +131,19 @@ func TestWithoutGIODamageEveryFrameIsWhole(t *testing.T) {
 		t.Fatal("without GIO_DAMAGE=on a frame must be drawn whole, whatever the buffer age")
 	}
 }
+
+// A shape the quad draws carries its geometry in the op, not in a path:
+// a ring that turns within the same clip must still dirty it.
+func TestChangedShapeDirtiesItsRectangle(t *testing.T) {
+	tr := freshTracker()
+	ring := func(start float32) imageOp {
+		op := colorOp(image.Rect(20, 20, 40, 40), red)
+		op.shape = shapeOp{kind: shapeArc, geom: [4]float32{30, 30, 9, 1}, radii: [4]float32{start, 1.5}}
+		return op
+	}
+	frameAt(tr, 1, []imageOp{ring(0)}, view, blue)
+	frameAt(tr, 1, []imageOp{ring(0.5)}, view, blue)
+	if want := image.Rect(20, 20, 40, 40); tr.full || len(tr.region) != 1 || tr.region[0] != want {
+		t.Fatalf("a turned ring dirtied %v (full %v), want %v", tr.region, tr.full, want)
+	}
+}

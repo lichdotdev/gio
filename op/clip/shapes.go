@@ -73,9 +73,9 @@ func (rr RRect) Push(ops *op.Ops) Stack {
 }
 
 // Path returns the PathSpec for the rounded rectangle.
-func (rr RRect) Path(ops *op.Ops) PathSpec {
+func (rr RRect) Path(o *op.Ops) PathSpec {
 	var p Path
-	p.Begin(ops)
+	p.Begin(o)
 
 	// https://pomax.github.io/bezierinfo/#circles_cubic.
 	const q = 4 * (math.Sqrt2 - 1) / 3
@@ -107,7 +107,31 @@ func (rr RRect) Path(ops *op.Ops) PathSpec {
 		f32.Point{X: w + nw*iq, Y: n},
 		f32.Point{X: w + nw, Y: n})
 
-	return p.End()
+	spec := p.End()
+	spec.shape = ops.RRect
+	spec.args = [ops.ShapeArgs]float32{w, n, e, s, se, sw, nw, ne}
+	return spec
+}
+
+// Arc is the arc of the circle of Radius around Center that starts at the
+// angle Start, in radians from the positive x axis towards the positive y
+// axis, and runs Sweep radians the same way.
+type Arc struct {
+	Center               f32.Point
+	Radius, Start, Sweep float32
+}
+
+// Path returns the PathSpec of the arc, for stroking.
+func (a Arc) Path(o *op.Ops) PathSpec {
+	var p Path
+	p.Begin(o)
+	sin, cos := math.Sincos(float64(a.Start))
+	p.MoveTo(a.Center.Add(f32.Pt(float32(cos), float32(sin)).Mul(a.Radius)))
+	p.ArcTo(a.Center, a.Center, a.Sweep)
+	spec := p.End()
+	spec.shape = ops.Arc
+	spec.args = [ops.ShapeArgs]float32{a.Center.X, a.Center.Y, a.Radius, a.Start, a.Sweep}
+	return spec
 }
 
 // Ellipse represents the largest axis-aligned ellipse that

@@ -77,6 +77,7 @@ const (
 	TypeSemanticSelected
 	TypeSemanticEnabled
 	TypeActionInput
+	TypeShape
 )
 
 type StackID struct {
@@ -120,6 +121,8 @@ const (
 	Path Shape = iota
 	Ellipse
 	Rect
+	RRect
+	Arc
 )
 
 const (
@@ -153,6 +156,7 @@ const (
 	TypeSemanticSelectedLen = 2
 	TypeSemanticEnabledLen  = 2
 	TypeActionInputLen      = 1 + 1
+	TypeShapeLen            = 1 + 4*ShapeArgs
 )
 
 func (op *ClipOp) Decode(data []byte) {
@@ -167,6 +171,32 @@ func (op *ClipOp) Decode(data []byte) {
 	op.Bounds.Max.Y = int(int32(bo.Uint32(data[13:])))
 	op.Outline = data[17] == 1
 	op.Shape = Shape(data[18])
+}
+
+// ShapeArgs is how many numbers a TypeShape op carries: an RRect's
+// rectangle and its SE, SW, NW and NE radii; an Arc's center, radius,
+// start and sweep.
+const ShapeArgs = 8
+
+// EncodeShape writes the TypeShape op of a clip shape's args into data.
+func EncodeShape(data []byte, args [ShapeArgs]float32) {
+	data[0] = byte(TypeShape)
+	bo := binary.LittleEndian
+	for i, a := range args {
+		bo.PutUint32(data[1+4*i:], math.Float32bits(a))
+	}
+}
+
+// DecodeShape reads the args of a TypeShape op.
+func DecodeShape(data []byte) (args [ShapeArgs]float32) {
+	if len(data) < TypeShapeLen || OpType(data[0]) != TypeShape {
+		panic("invalid op")
+	}
+	bo := binary.LittleEndian
+	for i := range args {
+		args[i] = math.Float32frombits(bo.Uint32(data[1+4*i:]))
+	}
+	return args
 }
 
 func Reset(o *Ops) {
@@ -426,6 +456,7 @@ var opProps = [0x100]opProp{
 	TypeSemanticSelected: {Size: TypeSemanticSelectedLen, NumRefs: 0},
 	TypeSemanticEnabled:  {Size: TypeSemanticEnabledLen, NumRefs: 0},
 	TypeActionInput:      {Size: TypeActionInputLen, NumRefs: 0},
+	TypeShape:            {Size: TypeShapeLen, NumRefs: 0},
 }
 
 func (t OpType) props() (size, numRefs uint32) {
@@ -489,6 +520,8 @@ func (t OpType) String() string {
 		return "Path"
 	case TypeStroke:
 		return "Stroke"
+	case TypeShape:
+		return "Shape"
 	case TypeSemanticLabel:
 		return "SemanticDescription"
 	default:

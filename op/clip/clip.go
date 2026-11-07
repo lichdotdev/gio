@@ -63,7 +63,7 @@ func (p Op) add(o *op.Ops) {
 			rect.Close()
 			path = rect.End()
 			hasSegments = true
-		case ops.Path:
+		case ops.Path, ops.RRect, ops.Arc:
 			// Nothing to do.
 		default:
 			panic("invalid empty path for shape")
@@ -75,6 +75,9 @@ func (p Op) add(o *op.Ops) {
 		data[0] = byte(ops.TypePath)
 		bo.PutUint64(data[1:], path.hash)
 		path.spec.Add(o)
+		if path.shape == ops.RRect || path.shape == ops.Arc {
+			ops.EncodeShape(ops.Write(&o.Internal, ops.TypeShapeLen), path.args)
+		}
 	}
 
 	bounds := path.bounds
@@ -115,7 +118,10 @@ type PathSpec struct {
 	hasSegments bool
 	bounds      image.Rectangle
 	shape       ops.Shape
-	hash        uint64
+	// args describe an RRect or Arc shape, for a renderer that draws it
+	// without its segments.
+	args [ops.ShapeArgs]float32
+	hash uint64
 }
 
 // Path constructs a Op clip path described by lines and
