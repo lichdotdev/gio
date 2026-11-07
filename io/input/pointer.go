@@ -680,6 +680,7 @@ func (s pointerState) pointerOf(e pointer.Event) (pointerState, int) {
 
 // Deliver is like Push, but delivers an event to a particular area.
 func (q *pointerQueue) Deliver(handlers map[event.Tag]*handler, areaIdx int, e pointer.Event) []taggedEvent {
+	e.WindowPosition = e.Position
 	scroll := e.Scroll
 	idx := len(q.hitTree) - 1
 	// Locate first potential receiver.
@@ -729,6 +730,7 @@ func (q *pointerQueue) SemanticArea(areaIdx int) (semanticContent, int) {
 
 func (q *pointerQueue) Push(handlers map[event.Tag]*handler, state pointerState, e pointer.Event) (pointerState, []taggedEvent) {
 	var evts []taggedEvent
+	e.WindowPosition = e.Position
 	if e.Kind == pointer.Cancel {
 		for k := range handlers {
 			evts = append(evts, taggedEvent{

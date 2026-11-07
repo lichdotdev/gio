@@ -255,6 +255,27 @@ func TestPointerMove(t *testing.T) {
 	assertEventPointerTypeSequence(t, events(&r, -1, filter(handler2)), pointer.Enter, pointer.Move, pointer.Leave, pointer.Cancel)
 }
 
+func TestPointerWindowPosition(t *testing.T) {
+	handler := new(int)
+	var ops op.Ops
+	off := op.Offset(image.Pt(30, 40)).Push(&ops)
+	r := new(Router)
+	f := addPointerHandler(r, &ops, handler, image.Rect(0, 0, 100, 100))
+	off.Pop()
+	events(r, -1, f)
+	r.Frame(&ops)
+	r.Queue(
+		pointer.Event{Kind: pointer.Move, Position: f32.Pt(50, 60)},
+		pointer.Event{Kind: pointer.Press, Position: f32.Pt(55, 65)},
+	)
+	for _, e := range events(r, -1, f) {
+		pe := e.(pointer.Event)
+		if got := pe.WindowPosition.Sub(pe.Position); got != f32.Pt(30, 40) {
+			t.Errorf("%v: window minus local position is %v, want the handler's offset (30,40)", pe.Kind, got)
+		}
+	}
+}
+
 func TestPointerLeave(t *testing.T) {
 	handler := new(int)
 	var ops op.Ops

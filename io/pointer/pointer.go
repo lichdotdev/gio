@@ -36,6 +36,10 @@ type Event struct {
 	// coordinates to local coordinates is performed by the inverse of
 	// the effective transformation of the tag.
 	Position f32.Point
+	// WindowPosition is the coordinates of the event in the window's
+	// coordinate system, the same for every receiving tag. Together with
+	// Position it locates the receiver in the window.
+	WindowPosition f32.Point
 	// Scroll is the scroll amount, if any.
 	Scroll f32.Point
 	// Modifiers is the set of active modifiers when
