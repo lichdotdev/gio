@@ -1168,10 +1168,12 @@ loop:
 			quads.key.outline = op.Outline
 			bounds := f32.FRect(op.Bounds)
 			trans, off := transformOffset(state.t)
-			if sh, sb, ok := shapeFor(op.Shape, quads.args, op.Outline, quads.key.strokeWidth, trans); ok && d.shapes && len(quads.aux) > 0 {
-				d.addShapeClip(&state, quads, trans, sh, sb, off)
-				quads = quadsOp{}
-				continue
+			if d.shapes && len(quads.aux) > 0 {
+				if sh, sb, ok := shapeFor(op.Shape, quads.args, op.Outline, quads.key.strokeWidth, trans); ok {
+					d.addShapeClip(&state, quads, trans, sh, sb, off)
+					quads = quadsOp{}
+					continue
+				}
 			}
 			if len(quads.aux) > 0 {
 				bounds = d.clipVerts(&quads, trans)
