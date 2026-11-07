@@ -131,3 +131,13 @@ func TestWithoutGIODamageEveryFrameIsWhole(t *testing.T) {
 		t.Fatal("without GIO_DAMAGE=on a frame must be drawn whole, whatever the buffer age")
 	}
 }
+
+func TestWithoutGIODamageTheRegionIsTheViewport(t *testing.T) {
+	damageOn = false
+	t.Cleanup(func() { damageOn = true })
+	tr := freshTracker()
+	frameAt(tr, 1, []imageOp{colorOp(image.Rect(0, 0, 10, 10), red)}, view, blue)
+	if len(tr.region) != 1 || tr.region[0] != (image.Rectangle{Max: view}) {
+		t.Fatalf("region %v, want the whole viewport %v", tr.region, view)
+	}
+}

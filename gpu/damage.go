@@ -89,6 +89,13 @@ func (t *damageTracker) setAge(age int) { t.age = age }
 
 // frame reads the frame's operations and settles the region to draw.
 func (t *damageTracker) frame(ops []imageOp, layers []opacityLayer, viewport image.Point, cleared bool, clearColor f32color.RGBA) {
+	if !damageOn {
+		// Every frame is whole, so hashing its operations would find
+		// what nothing reads.
+		t.full = true
+		t.region = append(t.region[:0], image.Rectangle{Max: viewport})
+		return
+	}
 	if t.cur == nil {
 		t.cur = map[opSig]int{}
 	}
