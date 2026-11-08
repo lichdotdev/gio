@@ -220,7 +220,7 @@ func checkPartial(t *testing.T, kinds int, compare func(got, want []byte) string
 // the frame drawn whole. Its scenes have no stencilled paths: a path's
 // coverage rounds by its atlas position, which differs between any two
 // frames, so whole frames do not match each other byte for byte there
-// either. TestPartialPathFrames covers those.
+// either. TestPartialPathFramesMatchWhole covers those.
 func TestPartialFramesMatchWhole(t *testing.T) {
 	checkPartial(t, pathlessKinds, func(got, want []byte) string {
 		if bytes.Equal(got, want) {
