@@ -18,6 +18,8 @@ type d3d11Context struct {
 	swchain       *d3d11.IDXGISwapChain
 	renderTarget  *d3d11.RenderTargetView
 	width, height int
+	// resized is set until the first Present of a new size.
+	resized bool
 }
 
 const debugDirectX = false
@@ -60,7 +62,14 @@ func (c *d3d11Context) RenderTarget() (gpu.RenderTarget, error) {
 }
 
 func (c *d3d11Context) Present() error {
-	return wrapErr(c.swchain.Present(1, 0))
+	syncInterval := 1
+	if c.resized {
+		// Interval 0 replaces any frame still queued, so the new size shows
+		// at the next composition instead of the old frame stretched to it.
+		syncInterval = 0
+		c.resized = false
+	}
+	return wrapErr(c.swchain.Present(syncInterval, 0))
 }
 
 func wrapErr(err error) error {
@@ -82,19 +91,29 @@ func (c *d3d11Context) Refresh() error {
 	if c.renderTarget != nil && width == c.width && height == c.height {
 		return nil
 	}
+	// ResizeBuffers fails while the context binds a view of the back buffer
+	// or the destruction of a released view is still deferred.
+	c.ctx.OMSetRenderTargets(nil, nil)
 	c.releaseFBO()
+	c.ctx.Flush()
 	if err := c.swchain.ResizeBuffers(0, 0, 0, d3d11.DXGI_FORMAT_UNKNOWN, 0); err != nil {
 		return wrapErr(err)
 	}
 	c.width = width
 	c.height = height
+	c.resized = true
 
 	backBuffer, err := c.swchain.GetBuffer(0, &d3d11.IID_Texture2D)
 	if err != nil {
 		return err
 	}
 	texture := (*d3d11.Resource)(unsafe.Pointer(backBuffer))
-	renderTarget, err := c.dev.CreateRenderTargetView(texture)
+	// The view, not the buffer, is sRGB: flip-model buffers cannot have an
+	// _SRGB format.
+	renderTarget, err := c.dev.CreateRenderTargetViewTEX2D(texture, &d3d11.RENDER_TARGET_VIEW_DESC_TEX2D{
+		Format:        d3d11.DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+		ViewDimension: d3d11.RTV_DIMENSION_TEXTURE2D,
+	})
 	d3d11.IUnknownRelease(unsafe.Pointer(backBuffer), backBuffer.Vtbl.Release)
 	if err != nil {
 		return err
@@ -116,6 +135,11 @@ func (c *d3d11Context) Release() {
 		d3d11.IUnknownRelease(unsafe.Pointer(c.swchain), c.swchain.Vtbl.Release)
 	}
 	if c.ctx != nil {
+		// A window can have one flip-model swap chain, and the destruction of
+		// the old one is deferred: a new context after a lost device would
+		// fail to create its own without this.
+		c.ctx.ClearState()
+		c.ctx.Flush()
 		d3d11.IUnknownRelease(unsafe.Pointer(c.ctx), c.ctx.Vtbl.Release)
 	}
 	if c.dev != nil {
