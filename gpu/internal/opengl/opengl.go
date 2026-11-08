@@ -215,6 +215,7 @@ func newOpenGLDevice(api driver.OpenGL) (driver.Device, error) {
 	if runtime.GOOS != "js" && ver[0] >= 3 {
 		b.feats.Features |= driver.FeatureBlitFramebuffer
 	}
+	reportSoftwareRenderer(f.GetString(gl.RENDERER))
 	if ffboErr == nil {
 		b.feats.Features |= driver.FeatureFloatRenderTargets
 	}
