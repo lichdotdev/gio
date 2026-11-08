@@ -4,7 +4,6 @@ package gpu
 
 import (
 	"image"
-	"os"
 
 	"gioui.org/gpu/internal/driver"
 	"gioui.org/internal/f32"
@@ -12,27 +11,20 @@ import (
 )
 
 // damageTracker finds what a frame changed against the one before it, so
-// that only that part of the window is drawn again. It sees a frame as a
-// multiset of draw operations: an operation that was not in the last frame,
-// or one of the last frame that is gone, dirties its rectangle. The region
-// drawn is that, plus what the frames the back buffer is older than
-// changed, which the window learns from EGL_EXT_buffer_age.
+// that only that part of the retained framebuffer is drawn again. It sees a
+// frame as a multiset of draw operations: an operation that was not in the
+// last frame, or one of the last frame that is gone, dirties its rectangle.
 type damageTracker struct {
 	prev, cur map[opSig]int
-	// history holds the dirty rectangles of the latest frames, newest first.
-	history  [8][]image.Rectangle
-	age      int
-	viewport image.Point
+	viewport  image.Point
 	// region is what the frame being drawn covers; full says it is the
 	// whole viewport, and no culling applies.
 	region []image.Rectangle
 	full   bool
-	frames int
-	// clearColor is the last frame's, when its first op was a fill of the
-	// whole viewport that the renderer turned into the clear: a frame drawn in
-	// part paints it under its rectangles, and one of another color is whole.
+	// held says the frame just tracked was drawn into the retained
+	// framebuffer, which then holds it for the next one.
+	held       bool
 	clearColor f32color.RGBA
-	cleared    bool
 }
 
 // opSig is what identifies a draw operation across frames.
@@ -82,76 +74,53 @@ func sigOf(img *imageOp) opSig {
 	return s
 }
 
-// setAge tells the tracker how many frames old the back buffer the next
-// frame draws into is: 1 is the frame just shown, 0 is unknown, and
-// unknown means the whole viewport is drawn.
-func (t *damageTracker) setAge(age int) { t.age = age }
-
-// frame reads the frame's operations and settles the region to draw.
-func (t *damageTracker) frame(ops []imageOp, layers []opacityLayer, viewport image.Point, cleared bool, clearColor f32color.RGBA) {
-	if !damageOn {
-		// Every frame is whole, so hashing its operations would find
-		// what nothing reads.
-		t.full = true
-		t.region = append(t.region[:0], image.Rectangle{Max: viewport})
+// frame reads the frame's operations and settles the region to draw. A
+// frame that does not go into the retained framebuffer is whole, and hashing
+// its operations would find what nothing reads.
+func (t *damageTracker) frame(ops []imageOp, layers []opacityLayer, viewport image.Point, retained bool, clearColor f32color.RGBA) {
+	whole := image.Rectangle{Max: viewport}
+	if !retained {
+		t.held, t.full = false, true
+		t.region = append(t.region[:0], whole)
 		return
 	}
 	if t.cur == nil {
 		t.cur = map[opSig]int{}
 	}
 	clear(t.cur)
-	// A layer's opacity lives on the layer, not on the operations it
-	// composites, so each layer counts as an operation of its own.
-	all := append(ops[:len(ops):len(ops)], make([]imageOp, 0, len(layers))...)
-	for _, l := range layers {
-		all = append(all, imageOp{clip: l.clip, layerOps: -1 - l.depth, material: material{opacity: l.opacity}})
-	}
-	for i := range all {
-		t.cur[sigOf(&all[i])]++
-	}
-	var dirty []image.Rectangle
-	for i := range all {
-		s := sigOf(&all[i])
+	dirty := t.region[:0]
+	mark := func(img *imageOp) {
+		s := sigOf(img)
+		t.cur[s]++
 		if n := t.prev[s]; n > 0 {
 			t.prev[s] = n - 1
-			continue
+			return
 		}
-		dirty = addRect(dirty, all[i].clip)
+		dirty = addRect(dirty, img.clip.Intersect(whole))
+	}
+	for i := range ops {
+		mark(&ops[i])
+	}
+	// A layer's opacity lives on the layer, not on the operations it
+	// composites, so each layer counts as an operation of its own.
+	for _, l := range layers {
+		mark(&imageOp{clip: l.clip, layerOps: -1 - l.depth, material: material{opacity: l.opacity}})
 	}
 	for s, n := range t.prev {
 		if n > 0 {
-			dirty = addRect(dirty, s.clip)
+			dirty = addRect(dirty, s.clip.Intersect(whole))
 		}
 	}
 	t.prev, t.cur = t.cur, t.prev
-	whole := image.Rectangle{Max: viewport}
-	for i := range dirty {
-		dirty[i] = dirty[i].Intersect(whole)
-	}
-	first := t.prev == nil || len(t.prev) == 0 && t.frames == 0
-	t.full = !damageOn || first || t.age <= 0 || t.age > len(t.history)+1 || viewport != t.viewport || cleared != t.cleared || clearColor != t.clearColor
-	t.cleared, t.clearColor = cleared, clearColor
-	t.viewport = viewport
-	t.region = append(t.region[:0], dirty...)
-	for i := 0; !t.full && i < t.age-1; i++ {
-		for _, r := range t.history[i] {
-			t.region = addRect(t.region, r)
-		}
-	}
-	copy(t.history[1:], t.history[:])
-	t.history[0] = dirty
+	// A translucent ground blends over what the framebuffer kept instead
+	// of replacing it, so only a whole frame gets a translucent clear right.
+	t.full = !t.held || viewport != t.viewport || clearColor != t.clearColor || clearColor.A != 1
+	t.held, t.viewport, t.clearColor = true, viewport, clearColor
 	if t.full {
-		t.region = append(t.region[:0], whole)
+		dirty = append(dirty[:0], whole)
 	}
-	t.frames++
-	t.age = 0
+	t.region = dirty
 }
-
-// damageOn draws a frame in part where the buffer age allows: GIO_DAMAGE=on
-// in the environment. Off, every frame is drawn whole, the way Gio does
-// upstream. It is opt-in because a driver can report an age its buffer does
-// not hold, and the frame then shows stale pixels: NVIDIA 595 on COSMIC does.
-var damageOn = os.Getenv("GIO_DAMAGE") == "on"
 
 // damageRects bounds how many rectangles a frame is drawn in: past it,
 // the rectangles fold into their bounding box.

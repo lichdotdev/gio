@@ -48,6 +48,7 @@ func loadGLESv2Procs() error {
 		"glDeleteQueries":                       &_glDeleteQueries,
 		"glDeleteVertexArrays":                  &_glDeleteVertexArrays,
 		"glCompileShader":                       &_glCompileShader,
+		"glBlitFramebuffer":                     &_glBlitFramebuffer,
 		"glCopyTexSubImage2D":                   &_glCopyTexSubImage2D,
 		"glGenerateMipmap":                      &_glGenerateMipmap,
 		"glGenBuffers":                          &_glGenBuffers,
@@ -148,6 +149,7 @@ var (
 	_glDeleteQueries                       *windows.Proc
 	_glDeleteVertexArrays                  *windows.Proc
 	_glCompileShader                       *windows.Proc
+	_glBlitFramebuffer                     *windows.Proc
 	_glCopyTexSubImage2D                   *windows.Proc
 	_glGenerateMipmap                      *windows.Proc
 	_glGenBuffers                          *windows.Proc
@@ -322,6 +324,10 @@ func (c *Functions) ClearDepthf(d float32) {
 
 func (c *Functions) CompileShader(s Shader) {
 	syscall.Syscall(_glCompileShader.Addr(), 1, uintptr(s.V), 0, 0)
+}
+
+func (f *Functions) BlitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1 int, mask Enum, filter Enum) {
+	syscall.Syscall12(_glBlitFramebuffer.Addr(), 10, uintptr(sx0), uintptr(sy0), uintptr(sx1), uintptr(sy1), uintptr(dx0), uintptr(dy0), uintptr(dx1), uintptr(dy1), uintptr(mask), uintptr(filter), 0, 0)
 }
 
 func (f *Functions) CopyTexSubImage2D(target Enum, level, xoffset, yoffset, x, y, width, height int) {

@@ -40,6 +40,10 @@ type Device interface {
 	// r lifts the limit.
 	Scissor(r image.Rectangle)
 	EndRenderPass()
+	// BlitFramebuffer copies size pixels from src to dst, pixel for pixel. It
+	// needs FeatureBlitFramebuffer; a frame is otherwise drawn straight to
+	// the output.
+	BlitFramebuffer(dst, src Texture, size image.Point)
 	PrepareTexture(t Texture)
 	BindProgram(p Program)
 	BindPipeline(p Pipeline)
@@ -179,6 +183,7 @@ const (
 	FeatureFloatRenderTargets
 	FeatureCompute
 	FeatureSRGB
+	FeatureBlitFramebuffer
 )
 
 const (

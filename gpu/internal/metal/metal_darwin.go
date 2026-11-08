@@ -1185,3 +1185,7 @@ func (f *Texture) ImplementsRenderTarget() {}
 // Scissor is not implemented: a frame is drawn in part only where the
 // window reports its buffer age, which only the EGL context does.
 func (b *Backend) Scissor(image.Rectangle) {}
+
+// BlitFramebuffer is not implemented: these backends draw every frame whole,
+// straight to the output.
+func (b *Backend) BlitFramebuffer(dst, src driver.Texture, size image.Point) {}

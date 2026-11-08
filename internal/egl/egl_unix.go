@@ -15,17 +15,6 @@ package egl
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-
-static PFNEGLSWAPBUFFERSWITHDAMAGEKHRPROC gio_swapWithDamage;
-
-static int gio_loadSwapBuffersWithDamage(void) {
-	gio_swapWithDamage = (PFNEGLSWAPBUFFERSWITHDAMAGEKHRPROC)eglGetProcAddress("eglSwapBuffersWithDamageKHR");
-	return gio_swapWithDamage != NULL;
-}
-
-static EGLBoolean gio_eglSwapBuffersWithDamage(EGLDisplay disp, EGLSurface surf, EGLint *rects, EGLint n) {
-	return gio_swapWithDamage(disp, surf, rects, n);
-}
 */
 import "C"
 
@@ -116,18 +105,4 @@ func eglCreateWindowSurface(disp _EGLDisplay, conf _EGLConfig, win NativeWindowT
 
 func eglWaitClient() bool {
 	return C.eglWaitClient() == C.EGL_TRUE
-}
-
-func eglLoadSwapBuffersWithDamage() bool {
-	return C.gio_loadSwapBuffersWithDamage() != 0
-}
-
-func eglSwapBuffersWithDamage(disp _EGLDisplay, surf _EGLSurface, rects []_EGLint) bool {
-	return C.gio_eglSwapBuffersWithDamage(disp, surf, &rects[0], _EGLint(len(rects)/4)) == C.EGL_TRUE
-}
-
-func eglQuerySurface(disp _EGLDisplay, surf _EGLSurface, attr _EGLint) (_EGLint, bool) {
-	var val _EGLint
-	ret := C.eglQuerySurface(disp, surf, attr, &val)
-	return val, ret == C.EGL_TRUE
 }
