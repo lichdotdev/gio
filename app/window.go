@@ -184,11 +184,6 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 			w.gpu = gpu
 		}
 		if w.gpu != nil {
-			if ager, ok := w.ctx.(interface{ BufferAge() int }); ok {
-				if g, ok := w.gpu.(interface{ SetBufferAge(int) }); ok {
-					g.SetBufferAge(ager.BufferAge())
-				}
-			}
 			if err := w.frame(frame, size); err != nil {
 				w.ctx.Unlock()
 				if errors.Is(err, errOutOfDate) {
@@ -209,7 +204,7 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 		signal()
 		var err error
 		if w.gpu != nil {
-			err = w.present(size)
+			err = w.ctx.Present()
 			w.ctx.Unlock()
 			if errors.Is(err, gpu.ErrDeviceLost) {
 				// The frame is already released to the client and can't be
@@ -236,19 +231,6 @@ func (w *Window) frame(frame *op.Ops, viewport image.Point) error {
 		return err
 	}
 	return w.gpu.Frame(frame, target, viewport)
-}
-
-// present shows the frame, as damage to the part the GPU drew when the
-// context takes a damage rectangle.
-func (w *Window) present(size image.Point) error {
-	p, ok := w.ctx.(interface {
-		PresentDamage([]image.Rectangle, image.Point) error
-	})
-	g, okg := w.gpu.(interface{ Damage() []image.Rectangle })
-	if !ok || !okg {
-		return w.ctx.Present()
-	}
-	return p.PresentDamage(g.Damage(), size)
 }
 
 func (w *Window) processFrame(frame *op.Ops, ack chan<- struct{}) {

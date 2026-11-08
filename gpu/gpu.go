@@ -14,6 +14,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"os"
 	"slices"
 	"time"
 	"unsafe"
@@ -49,6 +50,11 @@ type GPU interface {
 type gpu struct {
 	cache  *textureCache
 	damage damageTracker
+	// retained holds the last frame drawn, redrawn only where it changed
+	// and blitted whole to the output; nil is a frame drawn straight there.
+	retained     driver.Texture
+	retainedSize image.Point
+	retainOn     bool
 
 	profile                                string
 	timers                                 *timers
@@ -138,6 +144,9 @@ type pathOp struct {
 	pathVerts []byte
 	parent    *pathOp
 	place     placement
+	// culled keeps the path's place in the atlas but skips its stencil,
+	// because the frame's rectangles do not reach it.
+	culled bool
 }
 
 type imageOp struct {
@@ -363,6 +372,9 @@ func NewWithDevice(d driver.Device) (GPU, error) {
 func newGPU(ctx driver.Device) *gpu {
 	g := &gpu{
 		cache: newTextureCache(),
+		// Opt-in until the retained framebuffer has proved itself across
+		// the stacks the fork reaches.
+		retainOn: os.Getenv("GIO_DAMAGE") == "on",
 	}
 	g.ctx = ctx
 	g.drawOps.pathCache = newOpCache()
@@ -376,6 +388,7 @@ func (g *gpu) Clear(col color.NRGBA) {
 }
 
 func (g *gpu) Release() {
+	g.dropRetained()
 	g.renderer.release()
 	g.drawOps.pathCache.release()
 	g.cache.release()
@@ -387,17 +400,37 @@ func (g *gpu) Release() {
 
 func (g *gpu) Frame(frameOps *op.Ops, target RenderTarget, viewport image.Point) error {
 	g.collect(viewport, frameOps)
-	g.damage.frame(g.drawOps.imageOps, g.drawOps.layers, viewport, g.drawOps.clear, g.drawOps.clearColor)
+	g.damage.frame(g.drawOps.imageOps, g.drawOps.layers, viewport, g.drawOps.clear && g.prepareRetained(viewport), g.drawOps.clearColor)
 	return g.frame(target)
 }
 
-// SetBufferAge is how many frames old the buffer the next Frame draws into
-// is, from EGL_EXT_buffer_age: 1 is the frame just shown. With it, Frame
-// draws only what changed since that buffer was shown; 0 draws everything.
-func (g *gpu) SetBufferAge(age int) { g.damage.setAge(age) }
+// prepareRetained has the retained framebuffer at the viewport's size and
+// reports whether there is one. It is sRGB, as the output is or is made to
+// look, so a blit moves the frame's bytes unchanged.
+func (g *gpu) prepareRetained(viewport image.Point) bool {
+	if !g.retainOn || !g.ctx.Caps().Features.Has(driver.FeatureBlitFramebuffer) || viewport.X == 0 || viewport.Y == 0 {
+		return false
+	}
+	if g.retained != nil && g.retainedSize == viewport {
+		return true
+	}
+	g.dropRetained()
+	tex, err := g.ctx.NewTexture(driver.TextureFormatSRGBA, viewport.X, viewport.Y, driver.FilterNearest, driver.FilterNearest, driver.BufferBindingFramebuffer)
+	if err != nil {
+		return false
+	}
+	g.retained, g.retainedSize = tex, viewport
+	return true
+}
 
-// Damage is the part of the viewport the last Frame drew, for the window
-// to pass on as the surface's damage.
+func (g *gpu) dropRetained() {
+	if g.retained != nil {
+		g.retained.Release()
+		g.retained = nil
+	}
+}
+
+// Damage is the part of the viewport the last Frame drew.
 func (g *gpu) Damage() []image.Rectangle { return g.damage.region }
 
 func (g *gpu) collect(viewport image.Point, frameOps *op.Ops) {
@@ -422,23 +455,7 @@ func (g *gpu) frame(target RenderTarget) error {
 	for _, img := range g.drawOps.imageOps {
 		expandPathOp(img.path, img.clip)
 	}
-	if !g.damage.full {
-		// A layer is drawn whole into its own texture, so its paths stay
-		// whatever the frame's rectangles.
-		inLayer := map[*pathOp]bool{}
-		for _, l := range g.drawOps.layers {
-			for _, img := range g.drawOps.imageOps[l.opStart:l.opEnd] {
-				for p := img.path; p != nil; p = p.parent {
-					inLayer[p] = true
-				}
-			}
-		}
-		for _, p := range g.drawOps.pathOps {
-			if !inLayer[p] && !overlapsAny(g.damage.region, p.clip) {
-				p.clip = image.Rectangle{}
-			}
-		}
-	}
+	g.cullStencils()
 	g.stencilTimer.begin()
 	g.renderer.packStencils(&g.drawOps.pathOps)
 	g.renderer.stencilClips(g.drawOps.pathCache, g.drawOps.pathOps)
@@ -460,7 +477,11 @@ func (g *gpu) frame(target RenderTarget) error {
 			d.Action = driver.LoadActionClear
 		}
 	}
-	g.ctx.BeginRenderPass(defFBO, d)
+	out := defFBO
+	if g.damage.held {
+		out = g.retained
+	}
+	g.ctx.BeginRenderPass(out, d)
 	g.ctx.Viewport(0, 0, viewport.X, viewport.Y)
 	if g.damage.full {
 		g.renderer.damage = image.Rectangle{}
@@ -473,15 +494,16 @@ func (g *gpu) frame(target RenderTarget) error {
 		for _, rc := range g.damage.region {
 			g.ctx.Scissor(rc)
 			g.renderer.damage = rc
-			if g.damage.cleared {
-				g.renderer.drawOps(false, image.Point{}, g.renderer.blitter.viewport, ground)
-			}
+			g.renderer.drawOps(false, image.Point{}, g.renderer.blitter.viewport, ground)
 			g.renderer.drawOps(false, image.Point{}, g.renderer.blitter.viewport, g.drawOps.imageOps)
 		}
 		g.ctx.Scissor(image.Rectangle{})
 	}
 	g.coverTimer.end()
 	g.ctx.EndRenderPass()
+	if g.damage.held {
+		g.ctx.BlitFramebuffer(defFBO, g.retained, viewport)
+	}
 	g.cleanupTimer.begin()
 	g.cache.frame()
 	g.drawOps.pathCache.frame()
@@ -496,6 +518,29 @@ func (g *gpu) frame(target RenderTarget) error {
 		g.profile = fmt.Sprintf("draw:%7s gpu:%7s st:%7s cov:%7s", frameDur, ft, st, covt)
 	}
 	return nil
+}
+
+// cullStencils leaves unstencilled the paths the frame's rectangles do not
+// reach. They stay in the atlas: a path's place changes its rasterized
+// coverage by a rounding, and a frame drawn in part would differ from the
+// same frame drawn whole by that.
+func (g *gpu) cullStencils() {
+	if g.damage.full {
+		return
+	}
+	// A layer is drawn whole into its own texture, so its paths stay
+	// whatever the frame's rectangles.
+	inLayer := map[*pathOp]bool{}
+	for _, l := range g.drawOps.layers {
+		for _, img := range g.drawOps.imageOps[l.opStart:l.opEnd] {
+			for p := img.path; p != nil; p = p.parent {
+				inLayer[p] = true
+			}
+		}
+	}
+	for _, p := range g.drawOps.pathOps {
+		p.culled = !inLayer[p] && !overlapsAny(g.damage.region, p.clip)
+	}
 }
 
 func (g *gpu) Profile() string {
@@ -726,6 +771,9 @@ func (r *renderer) stencilClips(pathCache *opCache, ops []*pathOp) {
 	fbo := -1
 	r.pather.begin(r.packer.sizes)
 	for _, p := range ops {
+		if p.culled {
+			continue
+		}
 		if fbo != p.place.Idx {
 			if fbo != -1 {
 				r.ctx.EndRenderPass()

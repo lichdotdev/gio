@@ -212,6 +212,9 @@ func newOpenGLDevice(api driver.OpenGL) (driver.Device, error) {
 	if srgbErr == nil {
 		b.feats.Features |= driver.FeatureSRGB
 	}
+	if runtime.GOOS != "js" && ver[0] >= 3 {
+		b.feats.Features |= driver.FeatureBlitFramebuffer
+	}
 	if ffboErr == nil {
 		b.feats.Features |= driver.FeatureFloatRenderTargets
 	}
@@ -1240,6 +1243,12 @@ func (b *Backend) BeginRenderPass(tex driver.Texture, desc driver.LoadDesc) {
 }
 
 func (b *Backend) EndRenderPass() {
+}
+
+func (b *Backend) BlitFramebuffer(dst, src driver.Texture, size image.Point) {
+	b.glstate.bindFramebuffer(b.funcs, gl.READ_FRAMEBUFFER, src.(*texture).ensureFBO())
+	b.glstate.bindFramebuffer(b.funcs, gl.DRAW_FRAMEBUFFER, dst.(*texture).ensureFBO())
+	b.funcs.BlitFramebuffer(0, 0, size.X, size.Y, 0, 0, size.X, size.Y, gl.COLOR_BUFFER_BIT, gl.NEAREST)
 }
 
 func (f *texture) ImplementsRenderTarget() {}

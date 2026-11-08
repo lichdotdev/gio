@@ -7,7 +7,6 @@ package egl
 import (
 	"errors"
 	"fmt"
-	"image"
 	"runtime"
 	"slices"
 	"strings"
@@ -27,11 +26,6 @@ type eglContext struct {
 	visualID    int
 	srgb        bool
 	surfaceless bool
-	// bufferAge says EGL_EXT_buffer_age is there, and swapDamage
-	// EGL_KHR_swap_buffers_with_damage: together they let a frame draw and
-	// present only what changed.
-	bufferAge  bool
-	swapDamage bool
 }
 
 var (
@@ -49,7 +43,6 @@ const (
 	_EGL_CONTEXT_CLIENT_VERSION = 0x3098
 	_EGL_DEPTH_SIZE             = 0x3025
 	_EGL_GL_COLORSPACE_KHR      = 0x309d
-	_EGL_BUFFER_AGE_EXT         = 0x313d
 	_EGL_GL_COLORSPACE_SRGB_KHR = 0x3089
 	_EGL_GREEN_SIZE             = 0x3023
 	_EGL_EXTENSIONS             = 0x3055
@@ -75,43 +68,6 @@ func (c *Context) Release() {
 func (c *Context) Present() error {
 	if !eglSwapBuffers(c.disp, c.eglSurf) {
 		return fmt.Errorf("eglSwapBuffers failed (%x)", eglGetError())
-	}
-	return nil
-}
-
-// BufferAge is how many frames old the back buffer's content is: 1 is the
-// frame just presented. 0 says the age is unknown and the whole surface
-// must be drawn. It is read once per frame, after Lock.
-func (c *Context) BufferAge() int {
-	if !c.eglCtx.bufferAge {
-		return 0
-	}
-	age, ok := eglQuerySurface(c.disp, c.eglSurf, _EGL_BUFFER_AGE_EXT)
-	if !ok {
-		return 0
-	}
-	return int(age)
-}
-
-// PresentDamage presents the frame telling the compositor that only rects,
-// in pixels from the top left of a surface size high, changed; no rect
-// still presents, as a frame callback hangs on the commit.
-func (c *Context) PresentDamage(rects []image.Rectangle, size image.Point) error {
-	if !c.eglCtx.swapDamage {
-		return c.Present()
-	}
-	var flat []_EGLint
-	for _, r := range rects {
-		if r.Empty() {
-			continue
-		}
-		flat = append(flat, _EGLint(r.Min.X), _EGLint(size.Y-r.Max.Y), _EGLint(r.Dx()), _EGLint(r.Dy()))
-	}
-	if len(flat) == 0 {
-		flat = []_EGLint{0, 0, 1, 1}
-	}
-	if !eglSwapBuffersWithDamage(c.disp, c.eglSurf, flat) {
-		return fmt.Errorf("eglSwapBuffersWithDamageKHR failed (%x)", eglGetError())
 	}
 	return nil
 }
@@ -267,8 +223,6 @@ func createContext(disp _EGLDisplay) (*eglContext, error) {
 		visualID:    int(visID),
 		srgb:        srgb,
 		surfaceless: hasExtension(exts, "EGL_KHR_surfaceless_context"),
-		bufferAge:   hasExtension(exts, "EGL_EXT_buffer_age"),
-		swapDamage:  hasExtension(exts, "EGL_KHR_swap_buffers_with_damage") && eglLoadSwapBuffersWithDamage(),
 	}, nil
 }
 

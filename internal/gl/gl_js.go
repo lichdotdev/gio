@@ -272,6 +272,10 @@ func (f *Functions) BindBufferBase(target Enum, index int, b Buffer) {
 	f._bindBufferBase.Invoke(int(target), index, js.Value(b))
 }
 
+func (f *Functions) BlitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1 int, mask Enum, filter Enum) {
+	f.Ctx.Call("blitFramebuffer", sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, int(mask), int(filter))
+}
+
 func (f *Functions) BindFramebuffer(target Enum, fb Framebuffer) {
 	f._bindFramebuffer.Invoke(int(target), js.Value(fb))
 }
