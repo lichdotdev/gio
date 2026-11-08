@@ -451,6 +451,16 @@ type TEX2D_DSV struct {
 	MipSlice uint32
 }
 
+type RENDER_TARGET_VIEW_DESC_TEX2D struct {
+	Format        uint32
+	ViewDimension uint32
+	Texture2D     TEX2D_RTV
+}
+
+type TEX2D_RTV struct {
+	MipSlice uint32
+}
+
 type BLEND_DESC struct {
 	AlphaToCoverageEnable  uint32
 	IndependentBlendEnable uint32
@@ -526,6 +536,23 @@ type IDXGIDevice struct {
 		QueryResourceResidency  uintptr
 		SetGPUThreadPriority    uintptr
 		GetGPUThreadPriority    uintptr
+	}
+}
+
+type IDXGIDevice1 struct {
+	Vtbl *struct {
+		_IUnknownVTbl
+		SetPrivateData          uintptr
+		SetPrivateDataInterface uintptr
+		GetPrivateData          uintptr
+		GetParent               uintptr
+		GetAdapter              uintptr
+		CreateSurface           uintptr
+		QueryResourceResidency  uintptr
+		SetGPUThreadPriority    uintptr
+		GetGPUThreadPriority    uintptr
+		SetMaximumFrameLatency  uintptr
+		GetMaximumFrameLatency  uintptr
 	}
 }
 
@@ -614,6 +641,7 @@ var (
 	IID_Texture2D    = GUID{0x6f15aaf2, 0xd208, 0x4e89, 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c}
 	IID_IDXGIDebug   = GUID{0x119E7452, 0xDE9E, 0x40fe, 0x88, 0x06, 0x88, 0xF9, 0x0C, 0x12, 0xB4, 0x41}
 	IID_IDXGIDevice  = GUID{0x54ec77fa, 0x1377, 0x44e6, 0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c}
+	IID_IDXGIDevice1 = GUID{0x77db970f, 0x6276, 0x48ba, 0xba, 0x28, 0x07, 0x01, 0x43, 0xb4, 0x39, 0x2c}
 	IID_IDXGIFactory = GUID{0x7b7166ec, 0x21c7, 0x44ae, 0xb2, 0x1a, 0xc9, 0xae, 0x32, 0x1a, 0xe3, 0x69}
 	IID_ID3D11Debug  = GUID{0x79cf2233, 0x7536, 0x4948, 0x9d, 0x36, 0x1e, 0x46, 0x92, 0xdc, 0x57, 0x60}
 
@@ -635,21 +663,19 @@ const (
 	SDK_VERSION          = 7
 	DRIVER_TYPE_HARDWARE = 1
 
-	DXGI_FORMAT_UNKNOWN             = 0
-	DXGI_FORMAT_R16_FLOAT           = 54
-	DXGI_FORMAT_R32_FLOAT           = 41
-	DXGI_FORMAT_R32_TYPELESS        = 39
-	DXGI_FORMAT_R32G32_FLOAT        = 16
-	DXGI_FORMAT_R32G32B32_FLOAT     = 6
-	DXGI_FORMAT_R32G32B32A32_FLOAT  = 2
-	DXGI_FORMAT_R8G8B8A8_UNORM      = 28
-	DXGI_FORMAT_R8G8B8A8_UNORM_SRGB = 29
-	DXGI_FORMAT_R16_SINT            = 59
-	DXGI_FORMAT_R16G16_SINT         = 38
-	DXGI_FORMAT_R16_UINT            = 57
-	DXGI_FORMAT_D24_UNORM_S8_UINT   = 45
-	DXGI_FORMAT_R16G16_FLOAT        = 34
-	DXGI_FORMAT_R16G16B16A16_FLOAT  = 10
+	DXGI_FORMAT_UNKNOWN            = 0
+	DXGI_FORMAT_R16_FLOAT          = 54
+	DXGI_FORMAT_R32_FLOAT          = 41
+	DXGI_FORMAT_R32_TYPELESS       = 39
+	DXGI_FORMAT_R32G32_FLOAT       = 16
+	DXGI_FORMAT_R32G32B32_FLOAT    = 6
+	DXGI_FORMAT_R32G32B32A32_FLOAT = 2
+	DXGI_FORMAT_R16_SINT           = 59
+	DXGI_FORMAT_R16G16_SINT        = 38
+	DXGI_FORMAT_R16_UINT           = 57
+	DXGI_FORMAT_D24_UNORM_S8_UINT  = 45
+	DXGI_FORMAT_R16G16_FLOAT       = 34
+	DXGI_FORMAT_R16G16B16A16_FLOAT = 10
 
 	DXGI_DEBUG_RLO_SUMMARY         = 0x1
 	DXGI_DEBUG_RLO_DETAIL          = 0x2
@@ -663,8 +689,6 @@ const (
 	CPU_ACCESS_READ = 0x20000
 
 	MAP_READ = 1
-
-	DXGI_SWAP_EFFECT_DISCARD = 0
 
 	FEATURE_LEVEL_9_1  = 0x9100
 	FEATURE_LEVEL_9_3  = 0x9300
@@ -714,6 +738,7 @@ const (
 	CLEAR_STENCIL = 0x2
 
 	DSV_DIMENSION_TEXTURE2D = 3
+	RTV_DIMENSION_TEXTURE2D = 4
 
 	DEPTH_WRITE_MASK_ALL = 1
 
@@ -1046,6 +1071,23 @@ func (d *Device) CreateRenderTargetView(res *Resource) (*RenderTargetView, error
 		uintptr(unsafe.Pointer(d)),
 		uintptr(unsafe.Pointer(res)),
 		0, // pDesc
+		uintptr(unsafe.Pointer(&target)),
+		0, 0,
+	)
+	if r != 0 {
+		return nil, ErrorCode{Name: "DeviceCreateRenderTargetView", Code: uint32(r)}
+	}
+	return target, nil
+}
+
+func (d *Device) CreateRenderTargetViewTEX2D(res *Resource, desc *RENDER_TARGET_VIEW_DESC_TEX2D) (*RenderTargetView, error) {
+	var target *RenderTargetView
+	r, _, _ := syscall.Syscall6(
+		d.Vtbl.CreateRenderTargetView,
+		4,
+		uintptr(unsafe.Pointer(d)),
+		uintptr(unsafe.Pointer(res)),
+		uintptr(unsafe.Pointer(desc)),
 		uintptr(unsafe.Pointer(&target)),
 		0, 0,
 	)
@@ -1486,6 +1528,24 @@ func (c *DeviceContext) OMSetRenderTargets(target *RenderTargetView, depthStenci
 	)
 }
 
+func (c *DeviceContext) ClearState() {
+	syscall.Syscall(
+		c.Vtbl.ClearState,
+		1,
+		uintptr(unsafe.Pointer(c)),
+		0, 0,
+	)
+}
+
+func (c *DeviceContext) Flush() {
+	syscall.Syscall(
+		c.Vtbl.Flush,
+		1,
+		uintptr(unsafe.Pointer(c)),
+		0, 0,
+	)
+}
+
 func (c *DeviceContext) Draw(count, start uint32) {
 	syscall.Syscall(
 		c.Vtbl.Draw,
@@ -1574,6 +1634,20 @@ func (d *IDXGIFactory) CreateSwapChain(device *IUnknown, desc *DXGI_SWAP_CHAIN_D
 	return swchain, nil
 }
 
+func (d *IDXGIDevice1) SetMaximumFrameLatency(frames uint32) error {
+	r, _, _ := syscall.Syscall(
+		d.Vtbl.SetMaximumFrameLatency,
+		2,
+		uintptr(unsafe.Pointer(d)),
+		uintptr(frames),
+		0,
+	)
+	if r != 0 {
+		return ErrorCode{Name: "IDXGIDevice1SetMaximumFrameLatency", Code: uint32(r)}
+	}
+	return nil
+}
+
 func (d *IDXGIDevice) GetAdapter() (*IDXGIAdapter, error) {
 	var adapter *IDXGIAdapter
 	r, _, _ := syscall.Syscall(
@@ -1643,27 +1717,44 @@ func CreateSwapChain(dev *Device, hwnd windows.Handle) (*IDXGISwapChain, error) 
 	if err != nil {
 		return nil, fmt.Errorf("NewContext: %v", err)
 	}
-	swchain, err := (*IDXGIFactory)(unsafe.Pointer(dxgiFactory)).CreateSwapChain(
-		(*IUnknown)(unsafe.Pointer(dev)),
-		&DXGI_SWAP_CHAIN_DESC{
-			BufferDesc: DXGI_MODE_DESC{
-				Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+	// Best effort: the default latency of 3 frames only costs input lag.
+	_ = setMaximumFrameLatency(dev, maxFrameLatency)
+	factory := (*IDXGIFactory)(unsafe.Pointer(dxgiFactory))
+	var swchain *IDXGISwapChain
+	err = firstSwapChain(func(cfg swapChainConfig) error {
+		var err error
+		swchain, err = factory.CreateSwapChain(
+			(*IUnknown)(unsafe.Pointer(dev)),
+			&DXGI_SWAP_CHAIN_DESC{
+				BufferDesc: DXGI_MODE_DESC{
+					Format: cfg.format,
+				},
+				SampleDesc: DXGI_SAMPLE_DESC{
+					Count: 1,
+				},
+				BufferUsage:  DXGI_USAGE_RENDER_TARGET_OUTPUT,
+				BufferCount:  cfg.bufferCount,
+				OutputWindow: hwnd,
+				Windowed:     1,
+				SwapEffect:   cfg.effect,
 			},
-			SampleDesc: DXGI_SAMPLE_DESC{
-				Count: 1,
-			},
-			BufferUsage:  DXGI_USAGE_RENDER_TARGET_OUTPUT,
-			BufferCount:  1,
-			OutputWindow: hwnd,
-			Windowed:     1,
-			SwapEffect:   DXGI_SWAP_EFFECT_DISCARD,
-		},
-	)
+		)
+		return err
+	})
 	IUnknownRelease(unsafe.Pointer(dxgiFactory), dxgiFactory.Vtbl.Release)
 	if err != nil {
 		return nil, fmt.Errorf("NewContext: %v", err)
 	}
 	return swchain, nil
+}
+
+func setMaximumFrameLatency(dev *Device, frames uint32) error {
+	dxgiDev, err := IUnknownQueryInterface(unsafe.Pointer(dev), dev.Vtbl.QueryInterface, &IID_IDXGIDevice1)
+	if err != nil {
+		return err
+	}
+	defer IUnknownRelease(unsafe.Pointer(dxgiDev), dxgiDev.Vtbl.Release)
+	return (*IDXGIDevice1)(unsafe.Pointer(dxgiDev)).SetMaximumFrameLatency(frames)
 }
 
 func CreateDepthView(d *Device, width, height, depthBits int) (*DepthStencilView, error) {
