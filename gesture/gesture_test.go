@@ -66,6 +66,16 @@ func TestMouseClicks(t *testing.T) {
 				100*time.Millisecond+doubleClickDuration+1),
 			clicks: []int{1, 1},
 		},
+		{
+			label:  "double click 300ms apart",
+			events: mouseClickEvents(100*time.Millisecond, 400*time.Millisecond),
+			clicks: []int{1, 2},
+		},
+		{
+			label:  "two single clicks 500ms apart",
+			events: mouseClickEvents(100*time.Millisecond, 600*time.Millisecond),
+			clicks: []int{1, 1},
+		},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			var click Click
