@@ -25,8 +25,8 @@ import (
 	"gioui.org/unit"
 )
 
-// The duration is somewhat arbitrary.
-const doubleClickDuration = 200 * time.Millisecond
+// 400 ms is GTK's default gtk-double-click-time.
+const doubleClickDuration = 400 * time.Millisecond
 
 // Hover detects the hover gesture for a pointer area.
 type Hover struct {
