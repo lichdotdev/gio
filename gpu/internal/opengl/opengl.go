@@ -27,6 +27,7 @@ type Backend struct {
 	state      state
 	savedState glState
 	sharedCtx  bool
+	renderer   string
 
 	glver [2]int
 	gles  bool
@@ -207,6 +208,7 @@ func newOpenGLDevice(api driver.OpenGL) (driver.Device, error) {
 		alphaTriple: alphaTripleFor(ver),
 		srgbaTriple: srgbaTriple,
 		sharedCtx:   api.Shared,
+		renderer:    f.GetString(gl.RENDERER),
 	}
 	b.feats.BottomLeftOrigin = true
 	if srgbErr == nil {
@@ -215,7 +217,6 @@ func newOpenGLDevice(api driver.OpenGL) (driver.Device, error) {
 	if runtime.GOOS != "js" && ver[0] >= 3 {
 		b.feats.Features |= driver.FeatureBlitFramebuffer
 	}
-	reportSoftwareRenderer(f.GetString(gl.RENDERER))
 	if ffboErr == nil {
 		b.feats.Features |= driver.FeatureFloatRenderTargets
 	}

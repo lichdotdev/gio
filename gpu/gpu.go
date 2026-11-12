@@ -34,7 +34,7 @@ import (
 	// Register backends.
 	_ "gioui.org/gpu/internal/d3d11"
 	_ "gioui.org/gpu/internal/metal"
-	_ "gioui.org/gpu/internal/opengl"
+	"gioui.org/gpu/internal/opengl"
 	_ "gioui.org/gpu/internal/vulkan"
 )
 
@@ -352,6 +352,7 @@ func New(api API) (GPU, error) {
 	if err != nil {
 		return nil, err
 	}
+	opengl.ReportSoftwareRenderer(d)
 	return NewWithDevice(d)
 }
 
