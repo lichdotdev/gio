@@ -1442,3 +1442,28 @@ func TestPointerScrollDoesNotTrackPointer(t *testing.T) {
 			"the live pointer's last position is what determines it)", got, want)
 	}
 }
+
+func TestSourceOrigin(t *testing.T) {
+	handler := new(int)
+	var ops op.Ops
+	off := op.Offset(image.Pt(30, 40)).Push(&ops)
+	r := new(Router)
+	f := addPointerHandler(r, &ops, handler, image.Rect(5, 6, 100, 100))
+	off.Pop()
+	if _, ok := r.Source().Origin(handler); ok {
+		t.Error("a handler of no frame has an origin")
+	}
+	events(r, -1, f)
+	r.Frame(&ops)
+	if got, ok := r.Source().Origin(handler); !ok || got != f32.Pt(35, 46) {
+		t.Errorf("origin = %v, %v, want (35,46) as of the last frame", got, ok)
+	}
+	if _, ok := r.Source().Origin(new(int)); ok {
+		t.Error("an unknown tag has an origin")
+	}
+	var empty op.Ops
+	r.Frame(&empty)
+	if _, ok := r.Source().Origin(handler); ok {
+		t.Error("a handler the last frame did not draw keeps its origin")
+	}
+}

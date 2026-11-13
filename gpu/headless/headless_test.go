@@ -3,8 +3,11 @@
 package headless
 
 import (
+	"bytes"
 	"image"
 	"image/color"
+	"log"
+	"strings"
 	"testing"
 
 	"gioui.org/internal/f32color"
@@ -37,6 +40,20 @@ func TestHeadless(t *testing.T) {
 	}
 	if got := img.RGBAAt(0, 0); got != f32color.NRGBAToRGBA(col) {
 		t.Errorf("got color %v, expected %v", got, f32color.NRGBAToRGBA(col))
+	}
+}
+
+// A headless window is not the window: on a machine whose default EGL display
+// is Mesa's llvmpipe while the window runs on the GPU, logging here would
+// claim the window draws on the CPU.
+func TestHeadlessDoesNotReportSoftwareRenderer(t *testing.T) {
+	var buf bytes.Buffer
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&buf)
+	_, release := newTestWindow(t)
+	defer release()
+	if out := buf.String(); strings.Contains(out, "no GPU acceleration") {
+		t.Errorf("headless window logged %q", out)
 	}
 }
 
