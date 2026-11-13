@@ -909,3 +909,19 @@ func (s SemanticGestures) String() string {
 }
 
 func (SystemEvent) ImplementsEvent() {}
+
+// Origin is the window position of the top-left corner of the area that tag's
+// pointer handler was in at the last frame: where a widget sat, without
+// watching the pointer move over it. ok is false for a tag with no pointer
+// handler in that frame.
+func (s Source) Origin(tag event.Tag) (origin f32.Point, ok bool) {
+	if !s.Enabled() {
+		return f32.Point{}, false
+	}
+	h, found := s.r.handlers[tag]
+	if !found || h.pointer.areaPlusOne == 0 || h.pointer.areaPlusOne > len(s.r.pointer.queue.areas) {
+		return f32.Point{}, false
+	}
+	a := &s.r.pointer.queue.areas[h.pointer.areaPlusOne-1]
+	return a.trans.Transform(f32.Pt(float32(a.area.rect.Min.X), float32(a.area.rect.Min.Y))), true
+}
