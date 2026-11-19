@@ -748,10 +748,18 @@ func (h *x11EventHandler) handleEvents() bool {
 			// redraw only on the last expose event
 			redraw = (*C.XExposeEvent)(unsafe.Pointer(xev)).count == 0
 		case C.FocusIn:
+			// The keyboard coming back from a window of the program's
+			// own inside this one leaves it focused all along.
+			if (*C.XFocusChangeEvent)(unsafe.Pointer(xev)).detail == C.NotifyInferior {
+				break
+			}
 			w.config.Focused = true
 			w.ProcessEvent(ConfigEvent{Config: w.config})
 			w.ibus.Focused(true)
 		case C.FocusOut:
+			if (*C.XFocusChangeEvent)(unsafe.Pointer(xev)).detail == C.NotifyInferior {
+				break
+			}
 			w.config.Focused = false
 			w.ProcessEvent(ConfigEvent{Config: w.config})
 			w.ibus.Focused(false)
