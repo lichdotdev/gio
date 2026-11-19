@@ -1025,7 +1025,7 @@ func (b *Backend) ensureCmdBuf() vk.CommandBuffer {
 	b.cmdPool.used++
 	buf := b.cmdPool.current
 	if err := vk.BeginCommandBuffer(buf); err != nil {
-		panic(err)
+		panicUnlessLost(err)
 	}
 	return buf
 }
@@ -1098,10 +1098,10 @@ func (b *Backend) submitCmdBuf(fence vk.Fence) {
 	buf = b.ensureCmdBuf()
 	b.cmdPool.current = nil
 	if err := vk.EndCommandBuffer(buf); err != nil {
-		panic(err)
+		panicUnlessLost(err)
 	}
 	if err := vk.QueueSubmit(b.queue, buf, b.waitSems, b.waitStages, b.sigSems, fence); err != nil {
-		panic(err)
+		panicUnlessLost(err)
 	}
 	b.waitSems = b.waitSems[:0]
 	b.sigSems = b.sigSems[:0]
@@ -1147,6 +1147,14 @@ func formatFor(format driver.TextureFormat) vk.Format {
 		return vk.FORMAT_R16_SFLOAT
 	default:
 		panic("unsupported texture format")
+	}
+}
+
+// panicUnlessLost lets a lost device through: the frame is dropped, and the
+// window, told by its next acquire or present, makes a new device.
+func panicUnlessLost(err error) {
+	if mapErr(err) != driver.ErrDeviceLost {
+		panic(err)
 	}
 }
 
