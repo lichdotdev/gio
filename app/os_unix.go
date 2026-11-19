@@ -57,9 +57,24 @@ type windowDriver func(*callbacks, []Option) error
 // let each driver initialize these variables with their own version of createWindow.
 var wlDriver, x11Driver windowDriver
 
+// x11First is set by PreferX11.
+var x11First bool
+
+// PreferX11 makes the windows opened after it try X11 before Wayland, so a
+// program that places native X11 windows of its own inside its window, such
+// as a web view, gets an X11 window where XWayland runs. Wayland stays the
+// fallback where X11 cannot open.
+func PreferX11() {
+	x11First = true
+}
+
 func newWindow(window *callbacks, options []Option) {
 	var errFirst error
-	for _, d := range []windowDriver{wlDriver, x11Driver} {
+	drivers := []windowDriver{wlDriver, x11Driver}
+	if x11First {
+		drivers = []windowDriver{x11Driver, wlDriver}
+	}
+	for _, d := range drivers {
 		if d == nil {
 			continue
 		}
