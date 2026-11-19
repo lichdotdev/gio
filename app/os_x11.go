@@ -133,13 +133,13 @@ var (
 	newX11VulkanContext func(w *x11Window) (context, error)
 )
 
-// X11 and Vulkan doesn't work reliably on NVIDIA systems.
-// See https://gioui.org/issue/347.
-const vulkanBuggy = true
-
+// NewContext tries Vulkan before EGL: on NVIDIA under XWayland, eglInitialize
+// hangs instead of failing, while Vulkan draws. https://gioui.org/issue/347
+// reported X11 and Vulkan unreliable on NVIDIA, so EGL stays the fallback for
+// a Vulkan that cannot start.
 func (w *x11Window) NewContext() (context, error) {
 	var firstErr error
-	if f := newX11VulkanContext; f != nil && !vulkanBuggy {
+	if f := newX11VulkanContext; f != nil {
 		c, err := f(w)
 		if err == nil {
 			return c, nil
