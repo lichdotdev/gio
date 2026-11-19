@@ -213,6 +213,13 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 				w.setNextFrame(time.Time{})
 				return nil
 			}
+			if errors.Is(err, errOutOfDate) {
+				// The surface changed under the frame, as a window manager
+				// resizing a new window does: acquiring the next image
+				// reports it again and refreshes the surface.
+				w.setNextFrame(time.Time{})
+				return nil
+			}
 		}
 		return err
 	}
