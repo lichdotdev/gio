@@ -58,8 +58,6 @@ type Router struct {
 	deferring bool
 	// scratchFilters is for garbage-free construction of ephemeral filters.
 	scratchFilters []taggedFilter
-	// queued says events were queued since the last frame, or left by it.
-	queued bool
 }
 
 // Source implements the interface between a Router and user interface widgets.
@@ -136,10 +134,6 @@ type handler struct {
 	nextFilter filter
 	// processedFilter is the filters that have exhausted available events.
 	processedFilter filter
-	// queried says the handler asked for events in the current frame. One
-	// that did not, though still in the frame, keeps the filter it routes
-	// by: its widget's operations were replayed from an earlier frame.
-	queried bool
 }
 
 // filter is the union of a set of [io/event.Filters].
@@ -214,13 +208,6 @@ func (s Source) Focused(tag event.Tag) bool {
 
 // Event returns the next event that matches at least one of filters.
 // If the source is disabled, no events will be reported.
-// Queued reports whether input was queued since the last frame: a frame
-// that replays a subtree recorded earlier lays it out again when it does,
-// so its widgets see the input.
-func (s Source) Queued() bool {
-	return s.r != nil && s.r.queued
-}
-
 func (s Source) Event(filters ...event.Filter) (event.Event, bool) {
 	if !s.Enabled() {
 		return nil, false
@@ -278,7 +265,6 @@ func (q *Router) Event(filters ...event.Filter) (event.Event, bool) {
 		h := q.stateFor(tf.tag)
 		h.filter.Merge(tf.filter)
 		h.nextFilter.Merge(tf.filter)
-		h.queried = true
 	}
 	q.key.filter = append(q.key.filter, q.key.scratchFilter...)
 	q.key.nextFilter = append(q.key.nextFilter, q.key.scratchFilter...)
@@ -374,16 +360,8 @@ func (q *Router) Frame(frame *op.Ops) {
 	}
 	q.transfers = nil
 	q.deferring = false
-	for _, f := range q.key.filter {
-		if h, ok := q.handlers[f.Focus]; ok && f.Focus != nil && !h.queried {
-			q.key.nextFilter = append(q.key.nextFilter, f)
-		}
-	}
 	for _, h := range q.handlers {
-		if h.queried {
-			h.filter, h.nextFilter = h.nextFilter, h.filter
-		}
-		h.queried = false
+		h.filter, h.nextFilter = h.nextFilter, h.filter
 		h.nextFilter.Reset()
 		h.processedFilter.Reset()
 		h.pointer.Reset()
@@ -414,18 +392,10 @@ func (q *Router) Frame(frame *op.Ops) {
 
 	// Collapse state and events.
 	q.collapseState(len(q.changes) - 1)
-	// What the frame left for the next one to deliver, such as deferred
-	// events or the pointer entering an area that moved under it, is input
-	// for that frame too.
-	q.queued = false
-	for _, ch := range q.changes {
-		q.queued = q.queued || len(ch.events) > 0
-	}
 }
 
 // Queue events to be routed.
 func (q *Router) Queue(events ...event.Event) {
-	q.queued = q.queued || len(events) > 0
 	for _, e := range events {
 		se, system := e.(SystemEvent)
 		if system {
