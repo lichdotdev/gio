@@ -5,6 +5,7 @@ package layout
 import (
 	"time"
 
+	"gioui.org/internal/ops"
 	"gioui.org/io/input"
 	"gioui.org/io/system"
 	"gioui.org/op"
@@ -34,6 +35,16 @@ type Context struct {
 
 	input.Source
 	*op.Ops
+}
+
+// Execute a command. A frame request made under an [input.KeepOp] is also
+// recorded in the operations, so that a frame replaying them still asks for
+// the frame the subtree's widgets asked for when it was recorded.
+func (c Context) Execute(cmd input.Command) {
+	if inv, ok := cmd.(op.InvalidateCmd); ok && c.Ops != nil && c.Source.Enabled() && ops.InStack(&c.Ops.Internal, ops.KeepStack) {
+		ops.AddWakeup(&c.Ops.Internal, inv.At)
+	}
+	c.Source.Execute(cmd)
 }
 
 // Dp converts v to pixels.

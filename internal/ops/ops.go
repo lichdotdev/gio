@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"image"
 	"math"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/internal/byteslice"
@@ -79,6 +80,7 @@ const (
 	TypeActionInput
 	TypeKeep
 	TypePopKeep
+	TypeWakeup
 )
 
 type StackID struct {
@@ -158,6 +160,7 @@ const (
 	TypeActionInputLen      = 1 + 1
 	TypeKeepLen             = 1
 	TypePopKeepLen          = 1
+	TypeWakeupLen           = 1 + 1 + 8
 )
 
 func (op *ClipOp) Decode(data []byte) {
@@ -248,6 +251,32 @@ func AddCall(o *Ops, callOps *Ops, pc PC, end PC) {
 	bo.PutUint32(data[5:], uint32(pc.refs))
 	bo.PutUint32(data[9:], uint32(end.data))
 	bo.PutUint32(data[13:], uint32(end.refs))
+}
+
+// InStack reports whether an operation of kind is pushed on o.
+func InStack(o *Ops, kind StackKind) bool {
+	return o.stacks[kind].currentID != 0
+}
+
+// AddWakeup records a request for a frame at at, the zero time meaning
+// the next frame.
+func AddWakeup(o *Ops, at time.Time) {
+	data := Write(o, TypeWakeupLen)
+	data[0] = byte(TypeWakeup)
+	if !at.IsZero() {
+		data[1] = 1
+		binary.LittleEndian.PutUint64(data[2:], uint64(at.UnixNano()))
+	}
+}
+
+func DecodeWakeup(data []byte) time.Time {
+	if OpType(data[0]) != TypeWakeup {
+		panic("invalid op")
+	}
+	if data[1] == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, int64(binary.LittleEndian.Uint64(data[2:])))
 }
 
 func PushOp(o *Ops, kind StackKind) (StackID, uint32) {
@@ -433,6 +462,7 @@ var opProps = [0x100]opProp{
 	TypeActionInput:      {Size: TypeActionInputLen, NumRefs: 0},
 	TypeKeep:             {Size: TypeKeepLen, NumRefs: 0},
 	TypePopKeep:          {Size: TypePopKeepLen, NumRefs: 0},
+	TypeWakeup:           {Size: TypeWakeupLen, NumRefs: 0},
 }
 
 func (t OpType) props() (size, numRefs uint32) {
@@ -502,6 +532,8 @@ func (t OpType) String() string {
 		return "Keep"
 	case TypePopKeep:
 		return "PopKeep"
+	case TypeWakeup:
+		return "Wakeup"
 	default:
 		panic("unknown OpType")
 	}
