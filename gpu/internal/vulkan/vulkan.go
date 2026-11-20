@@ -32,13 +32,24 @@ type Backend struct {
 		size int
 		cap  int
 	}
-	defers     []func(d vk.Device)
-	frameSig   vk.Semaphore
-	frameFence vk.Fence
-	waitSems   []vk.Semaphore
-	waitStages []vk.PipelineStageFlags
-	sigSems    []vk.Semaphore
-	fence      vk.Fence
+	defers []func(d vk.Device)
+	// freeBufs holds released vertex and index buffers for reuse, by usage and
+	// power-of-two size, and freeBytes their total: a frame makes and releases
+	// a buffer per path, over a hundred, and NVIDIA's driver takes a kernel
+	// call for each allocation and each free, 40 ms of a frame (measured
+	// 2026-11-19).
+	freeBufs  map[bufferClass][]*Buffer
+	freeBytes int
+	// freeTexs is the same for textures, which a terminal remakes a row each:
+	// a scrolling one released and made 64 a frame.
+	freeTexs     map[textureClass][]*Texture
+	freeTexBytes int
+	frameSig     vk.Semaphore
+	frameFence   vk.Fence
+	waitSems     []vk.Semaphore
+	waitStages   []vk.PipelineStageFlags
+	sigSems      []vk.Semaphore
+	fence        vk.Fence
 
 	allPipes []*Pipeline
 
@@ -81,6 +92,8 @@ type Texture struct {
 	height     int
 	acquire    vk.Semaphore
 	foreign    bool
+	// class is where the texture goes back for reuse once released.
+	class textureClass
 
 	scope struct {
 		stage  vk.PipelineStageFlags
@@ -120,6 +133,9 @@ type Buffer struct {
 	store   []byte
 	mem     vk.DeviceMemory
 	usage   vk.BufferUsageFlags
+	// class is where the buffer goes back for reuse once released; zero for
+	// one that is destroyed instead.
+	class bufferClass
 
 	scope struct {
 		stage  vk.PipelineStageFlags
@@ -268,6 +284,17 @@ func (b *Backend) Release() {
 		buf.Release()
 	}
 	b.runDefers()
+	for _, texs := range b.freeTexs {
+		for _, t := range texs {
+			t.destroy(b.dev)
+		}
+	}
+	for _, bufs := range b.freeBufs {
+		for _, buf := range bufs {
+			vk.DestroyBuffer(b.dev, buf.buf)
+			vk.FreeMemory(b.dev, buf.mem)
+		}
+	}
 	for _, rp := range b.passes {
 		vk.DestroyRenderPass(b.dev, rp)
 	}
@@ -300,6 +327,13 @@ func (b *Backend) NewTexture(format driver.TextureFormat, width, height int, min
 		}
 		panic("unknown filter")
 	}
+	class := textureClass{format: vkfmt, width: width, height: height, usage: usage, minFilter: minFilter, magFilter: magFilter}
+	if free := b.freeTexs[class]; len(free) > 0 {
+		t := free[len(free)-1]
+		b.freeTexs[class] = free[:len(free)-1]
+		b.freeTexBytes -= class.bytes()
+		return t, nil
+	}
 	mipmapMode := vk.SAMPLER_MIPMAP_MODE_NEAREST
 	mipmap := minFilter == driver.FilterLinearMipmapLinear
 	nmipmaps := 1
@@ -328,7 +362,7 @@ func (b *Backend) NewTexture(format driver.TextureFormat, width, height int, min
 		vk.FreeMemory(b.dev, mem)
 		return nil, mapErr(err)
 	}
-	t := &Texture{backend: b, img: img, mem: mem, view: view, sampler: sampler, layout: vk.IMAGE_LAYOUT_UNDEFINED, passLayout: passLayout, width: width, height: height, format: vkfmt, mipmaps: nmipmaps}
+	t := &Texture{backend: b, img: img, mem: mem, view: view, sampler: sampler, layout: vk.IMAGE_LAYOUT_UNDEFINED, passLayout: passLayout, width: width, height: height, format: vkfmt, mipmaps: nmipmaps, class: class}
 	if bindings&driver.BufferBindingFramebuffer != 0 {
 		pass, err := vk.CreateRenderPass(b.dev, vkfmt, vk.ATTACHMENT_LOAD_OP_DONT_CARE,
 			vk.IMAGE_LAYOUT_UNDEFINED, vk.IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, nil)
@@ -360,8 +394,58 @@ func (b *Backend) NewBuffer(bindings driver.BufferBinding, size int) (driver.Buf
 	if bindings&driver.BufferBindingVertices != 0 {
 		usage |= vk.BUFFER_USAGE_VERTEX_BUFFER_BIT
 	}
-	buf, err := b.newBuffer(size, usage, vk.MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+	if usage&vk.BUFFER_USAGE_STORAGE_BUFFER_BIT != 0 {
+		// A storage buffer is bound whole, so a shader would see a reused
+		// one's larger size.
+		buf, err := b.newBuffer(size, usage, vk.MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+		return buf, mapErr(err)
+	}
+	class := bufferClass{usage: usage, size: pooledSize(size)}
+	if free := b.freeBufs[class]; len(free) > 0 {
+		buf := free[len(free)-1]
+		b.freeBufs[class] = free[:len(free)-1]
+		b.freeBytes -= class.size
+		return buf, nil
+	}
+	buf, err := b.newBuffer(class.size, usage, vk.MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+	buf.class = class
 	return buf, mapErr(err)
+}
+
+// bufferClass is a kind of reusable buffer: its usage and its size.
+type bufferClass struct {
+	usage vk.BufferUsageFlags
+	size  int
+}
+
+// minPooledSize is the smallest reusable buffer, so tiny paths share a class.
+const minPooledSize = 256
+
+// maxFreeBytes caps the memory held in released buffers waiting for reuse.
+const maxFreeBytes = 64 << 20
+
+// pooledSize is the size of the reusable buffer that holds size bytes.
+func pooledSize(size int) int {
+	n := minPooledSize
+	for n < size {
+		n <<= 1
+	}
+	return n
+}
+
+// reuse takes back a released buffer the GPU is done with, or destroys it
+// when the held ones already fill maxFreeBytes.
+func (b *Backend) reuse(buf *Buffer) {
+	if b.freeBytes+buf.class.size > maxFreeBytes {
+		vk.DestroyBuffer(b.dev, buf.buf)
+		vk.FreeMemory(b.dev, buf.mem)
+		return
+	}
+	if b.freeBufs == nil {
+		b.freeBufs = make(map[bufferClass][]*Buffer)
+	}
+	b.freeBufs[buf.class] = append(b.freeBufs[buf.class], buf)
+	b.freeBytes += buf.class.size
 }
 
 func (b *Backend) newBuffer(size int, usage vk.BufferUsageFlags, props vk.MemoryPropertyFlags) (*Buffer, error) {
@@ -699,16 +783,47 @@ func (t *Texture) Release() {
 		panic("external textures cannot be released")
 	}
 	freet := *t
-	t.backend.deferFunc(func(d vk.Device) {
-		if freet.fbo != 0 {
-			vk.DestroyFramebuffer(d, freet.fbo)
-		}
-		vk.DestroySampler(d, freet.sampler)
-		vk.DestroyImageView(d, freet.view)
-		vk.DestroyImage(d, freet.img)
-		vk.FreeMemory(d, freet.mem)
-	})
+	backend := t.backend
+	backend.deferFunc(func(vk.Device) { backend.reuseTexture(&freet) })
 	*t = Texture{}
+}
+
+// destroy frees the texture's objects.
+func (t *Texture) destroy(d vk.Device) {
+	if t.fbo != 0 {
+		vk.DestroyFramebuffer(d, t.fbo)
+	}
+	vk.DestroySampler(d, t.sampler)
+	vk.DestroyImageView(d, t.view)
+	vk.DestroyImage(d, t.img)
+	vk.FreeMemory(d, t.mem)
+}
+
+// textureClass is a kind of reusable texture: everything it was made with.
+type textureClass struct {
+	format               vk.Format
+	width, height        int
+	usage                vk.ImageUsageFlags
+	minFilter, magFilter driver.TextureFilter
+}
+
+// bytes is about the memory a texture of the class holds.
+func (c textureClass) bytes() int {
+	return c.width * c.height * 4
+}
+
+// reuseTexture takes back a released texture the GPU is done with, or
+// destroys it when the held ones already fill maxFreeBytes.
+func (b *Backend) reuseTexture(t *Texture) {
+	if b.freeTexBytes+t.class.bytes() > maxFreeBytes {
+		t.destroy(b.dev)
+		return
+	}
+	if b.freeTexs == nil {
+		b.freeTexs = make(map[textureClass][]*Texture)
+	}
+	b.freeTexs[t.class] = append(b.freeTexs[t.class], t)
+	b.freeTexBytes += t.class.bytes()
 }
 
 func (p *Pipeline) Release() {
@@ -954,7 +1069,10 @@ func (b *Buffer) barrier(cmdBuf vk.CommandBuffer, stage vk.PipelineStageFlags, a
 
 func (b *Buffer) Release() {
 	freeb := *b
-	if freeb.buf != 0 {
+	if freeb.buf != 0 && freeb.class.size > 0 {
+		backend := b.backend
+		backend.deferFunc(func(vk.Device) { backend.reuse(&freeb) })
+	} else if freeb.buf != 0 {
 		b.backend.deferFunc(func(d vk.Device) {
 			vk.DestroyBuffer(d, freeb.buf)
 			vk.FreeMemory(d, freeb.mem)
