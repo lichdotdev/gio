@@ -192,7 +192,7 @@ func (p *Path) gap() {
 		data := ops.WriteMulti(p.ops, scene.CommandSize+4)
 		bo := binary.LittleEndian
 		bo.PutUint32(data[0:], uint32(p.contour))
-		p.cmd(data[4:], scene.Gap(p.pen, p.start))
+		p.cmd(data, scene.Gap(p.pen, p.start))
 	}
 }
 
@@ -215,14 +215,17 @@ func (p *Path) LineTo(to f32.Point) {
 	data := ops.WriteMulti(p.ops, scene.CommandSize+4)
 	bo := binary.LittleEndian
 	bo.PutUint32(data[0:], uint32(p.contour))
-	p.cmd(data[4:], scene.Line(p.pen, to))
+	p.cmd(data, scene.Line(p.pen, to))
 	p.expand(p.pen)
 	p.expand(to)
 	p.pen = to
 }
 
+// cmd encodes c after the contour index already in data, and hashes both:
+// the contour decides where a stroke starts and ends, so two paths of the
+// same commands in other contours must not share a hash.
 func (p *Path) cmd(data []byte, c scene.Command) {
-	ops.EncodeCommand(data, c)
+	ops.EncodeCommand(data[4:], c)
 	p.hash.Write(data)
 }
 
@@ -265,7 +268,7 @@ func (p *Path) QuadTo(ctrl, to f32.Point) {
 	data := ops.WriteMulti(p.ops, scene.CommandSize+4)
 	bo := binary.LittleEndian
 	bo.PutUint32(data[0:], uint32(p.contour))
-	p.cmd(data[4:], scene.Quad(p.pen, ctrl, to))
+	p.cmd(data, scene.Quad(p.pen, ctrl, to))
 	p.expand(p.pen)
 	p.expand(ctrl)
 	p.expand(to)
@@ -310,7 +313,7 @@ func (p *Path) CubeTo(ctrl0, ctrl1, to f32.Point) {
 	data := ops.WriteMulti(p.ops, scene.CommandSize+4)
 	bo := binary.LittleEndian
 	bo.PutUint32(data[0:], uint32(p.contour))
-	p.cmd(data[4:], scene.Cubic(p.pen, ctrl0, ctrl1, to))
+	p.cmd(data, scene.Cubic(p.pen, ctrl0, ctrl1, to))
 	p.expand(p.pen)
 	p.expand(ctrl0)
 	p.expand(ctrl1)
