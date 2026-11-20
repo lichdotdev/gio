@@ -60,7 +60,7 @@ func TestAReplayedFrameWhoseWakeupFellDueReportsInput(t *testing.T) {
 	call := keptSubtree(r, due)
 	frame(r, call, time.Time{})
 	frame(r, call, time.Now().Add(16*time.Millisecond))
-	if !r.Source().Queued() {
+	if !r.Source().Queued(time.Now()) {
 		t.Fatal("a replayed subtree's due frame is not reported, so it is never laid out again")
 	}
 }
@@ -70,7 +70,7 @@ func TestAFutureReplayedWakeupIsNotInput(t *testing.T) {
 	call := keptSubtree(r, time.Now().Add(time.Hour))
 	frame(r, call, time.Time{})
 	frame(r, call, time.Time{})
-	if r.Source().Queued() {
+	if r.Source().Queued(time.Now()) {
 		t.Fatal("a replayed wakeup an hour away reports input")
 	}
 }
@@ -89,5 +89,21 @@ func TestAFrameRequestOutsideAKeepOpIsNotReplayed(t *testing.T) {
 	frame(r, call, time.Time{})
 	if at, ok := r.WakeupTime(); ok {
 		t.Fatalf("a request made outside a KeepOp was replayed: wakes at %v", at)
+	}
+}
+
+// The frame's time says whether a replayed request fell due, not the
+// clock: a window drawing frames ahead of it, or a test, gets its frame.
+func TestAReplayedWakeupFallsDueAtTheFramesTime(t *testing.T) {
+	r := new(input.Router)
+	at := time.Unix(1000, 0)
+	call := keptSubtree(r, at)
+	frame(r, call, time.Time{})
+	frame(r, call, time.Time{})
+	if r.Source().Queued(at.Add(-time.Millisecond)) {
+		t.Fatal("a replayed request is reported due before its time")
+	}
+	if !r.Source().Queued(at) {
+		t.Fatal("a replayed request is not reported due at its time")
 	}
 }

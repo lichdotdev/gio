@@ -223,16 +223,15 @@ func (s Source) Focused(tag event.Tag) bool {
 // Event returns the next event that matches at least one of filters.
 // If the source is disabled, no events will be reported.
 // Queued reports whether input was queued since the last frame, or left by
-// it for this one: a frame that replays a subtree recorded earlier under a
-// KeepOp lays it out again when it does, so its widgets take the input.
-//
-// A frame request replayed under a KeepOp that fell due counts as input too:
-// the subtree's widgets asked for this frame when it was recorded.
-func (s Source) Queued() bool {
+// it for this one, or whether a frame request replayed under a KeepOp falls
+// due at now, the frame's time: a frame that replays a subtree recorded
+// earlier lays it out again when it does, so its widgets take the input and
+// get the frame they asked for.
+func (s Source) Queued(now time.Time) bool {
 	if s.r == nil {
 		return false
 	}
-	return s.r.queued || s.r.keptWake && !time.Now().Before(s.r.keptWakeup)
+	return s.r.queued || s.r.keptWake && !now.Before(s.r.keptWakeup)
 }
 
 func (s Source) Event(filters ...event.Filter) (event.Event, bool) {

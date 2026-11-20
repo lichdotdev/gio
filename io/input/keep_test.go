@@ -5,6 +5,7 @@ package input
 import (
 	"image"
 	"testing"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/io/event"
@@ -123,19 +124,19 @@ func TestAKeptHandlerThatAsksAgainRoutesByItsNewFilter(t *testing.T) {
 
 func TestInputQueuedSinceTheLastFrame(t *testing.T) {
 	var r Router
-	if r.Source().Queued() {
+	if r.Source().Queued(time.Now()) {
 		t.Fatal("a new router reports queued input")
 	}
 	r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(1, 1)})
-	if !r.Source().Queued() {
+	if !r.Source().Queued(time.Now()) {
 		t.Fatal("a queued pointer event is not reported")
 	}
 	r.Frame(new(op.Ops))
-	if r.Source().Queued() {
+	if r.Source().Queued(time.Now()) {
 		t.Fatal("input stays reported after the frame that saw it")
 	}
 	r.Queue(key.Event{Name: "A"})
-	if !r.Source().Queued() {
+	if !r.Source().Queued(time.Now()) {
 		t.Fatal("a queued key event is not reported")
 	}
 }
@@ -150,7 +151,7 @@ func TestInputLeftByAFrameCountsAsQueued(t *testing.T) {
 	r.Queue(key.Event{Name: "A"})
 	events(r, -1, f...)
 	r.Frame(new(op.Ops))
-	if !r.Source().Queued() {
+	if !r.Source().Queued(time.Now()) {
 		t.Fatal("events a frame deferred to the next are not reported")
 	}
 }
