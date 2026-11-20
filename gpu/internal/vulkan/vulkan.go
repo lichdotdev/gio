@@ -903,11 +903,24 @@ func (p *descPool) bindDescriptorSet(b *Backend, cmdBuf vk.CommandBuffer, bindPo
 	vk.CmdBindDescriptorSets(cmdBuf, bindPoint, p.layout, 0, []vk.DescriptorSet{descSet})
 }
 
+// writeAccess are the accesses that write.
+const writeAccess = vk.ACCESS_SHADER_WRITE_BIT | vk.ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+	vk.ACCESS_TRANSFER_WRITE_BIT | vk.ACCESS_HOST_WRITE_BIT | vk.ACCESS_MEMORY_WRITE_BIT
+
 func (t *Texture) imageBarrier(cmdBuf vk.CommandBuffer, layout vk.ImageLayout, stage vk.PipelineStageFlags, access vk.AccessFlags) {
 	srcStage := t.scope.stage
 	if srcStage == 0 && t.layout == layout {
 		t.scope.stage = stage
 		t.scope.access = access
+		return
+	}
+	// A read after reads in the same layout races with nothing: widen the
+	// scope the next write's barrier waits on instead. Sampling a texture
+	// drawn from before cost a barrier a draw, a tenth of a frame's CPU on
+	// NVIDIA's driver.
+	if t.layout == layout && (t.scope.access|access)&writeAccess == 0 {
+		t.scope.stage |= stage
+		t.scope.access |= access
 		return
 	}
 	if srcStage == 0 {
