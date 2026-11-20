@@ -191,6 +191,10 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 					sync = true
 					continue
 				}
+				if errors.Is(err, errNotReady) {
+					w.setNextFrame(time.Time{})
+					return nil
+				}
 				w.destroyGPU()
 				if errors.Is(err, gpu.ErrDeviceLost) {
 					continue

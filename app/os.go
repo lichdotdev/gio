@@ -21,6 +21,10 @@ import (
 // longer match the window.
 var errOutOfDate = errors.New("app: GPU surface out of date")
 
+// errNotReady is a surface with no image free to draw into yet: its frame is
+// dropped and drawn again, rather than the window waiting for one.
+var errNotReady = errors.New("app: GPU surface not ready")
+
 // Config describes a Window configuration.
 type Config struct {
 	// Size is the window dimensions (Width, Height).
