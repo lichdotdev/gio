@@ -6,6 +6,7 @@ package app
 
 import (
 	"errors"
+	"time"
 	"unsafe"
 
 	"gioui.org/gpu"
@@ -70,14 +71,24 @@ func newVulkanContext(inst vk.Instance, surf vk.Surface) (*vkContext, error) {
 	return c, nil
 }
 
+// acquireTimeout bounds the wait for a swapchain image. A compositor can
+// hold the images for seconds while a window is resized under XWayland
+// (measured 5 to 6 s on NVIDIA), and the window then neither drew nor read
+// its events; wgpu bounds the same wait.
+const acquireTimeout = uint64(100 * time.Millisecond)
+
 func (c *vkContext) RenderTarget() (gpu.RenderTarget, error) {
 	vk.WaitForFences(c.dev, c.fence)
-	vk.ResetFences(c.dev, c.fence)
 
-	imgIdx, err := vk.AcquireNextImage(c.dev, c.swchain, c.acquireSem, 0)
+	imgIdx, err := vk.AcquireNextImage(c.dev, c.swchain, c.acquireSem, 0, acquireTimeout)
+	if errors.Is(err, vk.TIMEOUT) || errors.Is(err, vk.NOT_READY) {
+		// The fence stays signaled: nothing was submitted for it.
+		return nil, errNotReady
+	}
 	if err := mapSurfaceErr(err); err != nil {
 		return nil, err
 	}
+	vk.ResetFences(c.dev, c.fence)
 	c.presentIdx = imgIdx
 	return gpu.VulkanRenderTarget{
 		WaitSem:     uint64(c.acquireSem),

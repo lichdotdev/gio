@@ -389,7 +389,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"math"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -523,6 +522,8 @@ const (
 	ERROR_SURFACE_LOST_KHR = Error(C.VK_ERROR_SURFACE_LOST_KHR)
 	ERROR_DEVICE_LOST      = Error(C.VK_ERROR_DEVICE_LOST)
 	SUBOPTIMAL_KHR         = Error(C.VK_SUBOPTIMAL_KHR)
+	TIMEOUT                = Error(C.VK_TIMEOUT)
+	NOT_READY              = Error(C.VK_NOT_READY)
 
 	FENCE_CREATE_SIGNALED_BIT = 0x00000001
 
@@ -1057,10 +1058,14 @@ func DestroySwapchain(d Device, swchain Swapchain) {
 	C.vkDestroySwapchainKHR(funcs.vkDestroySwapchainKHR, d, swchain, nil)
 }
 
-func AcquireNextImage(d Device, swchain Swapchain, sem Semaphore, fence Fence) (int, error) {
-	res := C.vkAcquireNextImageKHR(funcs.vkAcquireNextImageKHR, d, swchain, math.MaxUint64, sem, fence)
+// AcquireNextImage acquires the swapchain's next image, waiting at most
+// timeout nanoseconds. A suboptimal swapchain still hands an image, whose
+// index comes back with the error: rendering another one would present an
+// image never acquired and leave the acquired one with the driver.
+func AcquireNextImage(d Device, swchain Swapchain, sem Semaphore, fence Fence, timeout uint64) (int, error) {
+	res := C.vkAcquireNextImageKHR(funcs.vkAcquireNextImageKHR, d, swchain, C.uint64_t(timeout), sem, fence)
 	if err := vkErr(res.res); err != nil {
-		return 0, fmt.Errorf("vulkan: vkAcquireNextImageKHR: %w", err)
+		return int(res.uint), fmt.Errorf("vulkan: vkAcquireNextImageKHR: %w", err)
 	}
 	return int(res.uint), nil
 }
