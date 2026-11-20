@@ -64,6 +64,10 @@ type Router struct {
 	savedKeep []int
 	// queued says events were queued since the last frame, or left by it.
 	queued bool
+	// keptWakeup is the earliest frame request replayed under a KeepOp in
+	// the last frame, if keptWake.
+	keptWakeup time.Time
+	keptWake   bool
 }
 
 // Source implements the interface between a Router and user interface widgets.
@@ -221,8 +225,14 @@ func (s Source) Focused(tag event.Tag) bool {
 // Queued reports whether input was queued since the last frame, or left by
 // it for this one: a frame that replays a subtree recorded earlier under a
 // KeepOp lays it out again when it does, so its widgets take the input.
+//
+// A frame request replayed under a KeepOp that fell due counts as input too:
+// the subtree's widgets asked for this frame when it was recorded.
 func (s Source) Queued() bool {
-	return s.r != nil && s.r.queued
+	if s.r == nil {
+		return false
+	}
+	return s.r.queued || s.r.keptWake && !time.Now().Before(s.r.keptWakeup)
 }
 
 func (s Source) Event(filters ...event.Filter) (event.Event, bool) {
@@ -839,6 +849,7 @@ func (q *Router) stateFor(tag event.Tag) *handler {
 func (q *Router) collect() {
 	q.transStack = q.transStack[:0]
 	q.keepDepth = 0
+	q.keptWake = false
 	pc := &q.pointer.collector
 	pc.q = &q.pointer.queue
 	pc.Reset()
@@ -902,6 +913,12 @@ func (q *Router) collect() {
 			}
 
 		// Pointer ops.
+		case ops.TypeWakeup:
+			at := ops.DecodeWakeup(encOp.Data)
+			q.execute(op.InvalidateCmd{At: at})
+			if !q.keptWake || at.Before(q.keptWakeup) {
+				q.keptWakeup, q.keptWake = at, true
+			}
 		case ops.TypeKeep:
 			q.keepDepth++
 		case ops.TypePopKeep:
