@@ -58,6 +58,12 @@ type Router struct {
 	deferring bool
 	// scratchFilters is for garbage-free construction of ephemeral filters.
 	scratchFilters []taggedFilter
+	// keepDepth counts the KeepOps around the operations being collected,
+	// and savedKeep is keepDepth at each saved state.
+	keepDepth int
+	savedKeep []int
+	// queued says events were queued since the last frame, or left by it.
+	queued bool
 }
 
 // Source implements the interface between a Router and user interface widgets.
@@ -134,6 +140,10 @@ type handler struct {
 	nextFilter filter
 	// processedFilter is the filters that have exhausted available events.
 	processedFilter filter
+	// queried says the handler asked for events in the current frame, and
+	// kept that it was added under a KeepOp; one kept but not queried keeps
+	// the filter it routes by.
+	queried, kept bool
 }
 
 // filter is the union of a set of [io/event.Filters].
@@ -208,6 +218,13 @@ func (s Source) Focused(tag event.Tag) bool {
 
 // Event returns the next event that matches at least one of filters.
 // If the source is disabled, no events will be reported.
+// Queued reports whether input was queued since the last frame, or left by
+// it for this one: a frame that replays a subtree recorded earlier under a
+// KeepOp lays it out again when it does, so its widgets take the input.
+func (s Source) Queued() bool {
+	return s.r != nil && s.r.queued
+}
+
 func (s Source) Event(filters ...event.Filter) (event.Event, bool) {
 	if !s.Enabled() {
 		return nil, false
@@ -265,6 +282,7 @@ func (q *Router) Event(filters ...event.Filter) (event.Event, bool) {
 		h := q.stateFor(tf.tag)
 		h.filter.Merge(tf.filter)
 		h.nextFilter.Merge(tf.filter)
+		h.queried = true
 	}
 	q.key.filter = append(q.key.filter, q.key.scratchFilter...)
 	q.key.nextFilter = append(q.key.nextFilter, q.key.scratchFilter...)
@@ -361,20 +379,18 @@ func (q *Router) Frame(frame *op.Ops) {
 	q.transfers = nil
 	q.deferring = false
 	for _, h := range q.handlers {
-		h.filter, h.nextFilter = h.nextFilter, h.filter
-		h.nextFilter.Reset()
 		h.processedFilter.Reset()
 		h.pointer.Reset()
 		h.key.Reset()
+		h.kept = false
 	}
-	q.key.filter, q.key.nextFilter = q.key.nextFilter, q.key.filter
-	q.key.nextFilter = q.key.nextFilter[:0]
 	var ops *ops.Ops
 	if frame != nil {
 		ops = &frame.Internal
 	}
 	q.reader.Reset(ops)
 	q.collect()
+	q.swapFilters()
 	for k, h := range q.handlers {
 		if !h.active {
 			delete(q.handlers, k)
@@ -392,10 +408,40 @@ func (q *Router) Frame(frame *op.Ops) {
 
 	// Collapse state and events.
 	q.collapseState(len(q.changes) - 1)
+	// What the frame left for the next one to deliver, such as deferred
+	// events or the pointer entering an area that moved under it, is input
+	// for that frame too.
+	q.queued = false
+	for _, ch := range q.changes {
+		q.queued = q.queued || len(ch.events) > 0
+	}
+}
+
+// swapFilters makes the filters the frame's widgets asked for the ones
+// events are routed by until the next frame. A handler under a KeepOp that
+// asked for nothing keeps its filter, and the key filters focused on it:
+// its operations were replayed from an earlier frame without running its
+// widget.
+func (q *Router) swapFilters() {
+	for _, f := range q.key.filter {
+		if h, ok := q.handlers[f.Focus]; ok && f.Focus != nil && h.kept && !h.queried {
+			q.key.nextFilter = append(q.key.nextFilter, f)
+		}
+	}
+	q.key.filter, q.key.nextFilter = q.key.nextFilter, q.key.filter
+	q.key.nextFilter = q.key.nextFilter[:0]
+	for _, h := range q.handlers {
+		if h.queried || !h.kept {
+			h.filter, h.nextFilter = h.nextFilter, h.filter
+		}
+		h.nextFilter.Reset()
+		h.queried = false
+	}
 }
 
 // Queue events to be routed.
 func (q *Router) Queue(events ...event.Event) {
+	q.queued = q.queued || len(events) > 0
 	for _, e := range events {
 		se, system := e.(SystemEvent)
 		if system {
@@ -792,6 +838,7 @@ func (q *Router) stateFor(tag event.Tag) *handler {
 
 func (q *Router) collect() {
 	q.transStack = q.transStack[:0]
+	q.keepDepth = 0
 	pc := &q.pointer.collector
 	pc.q = &q.pointer.queue
 	pc.Reset()
@@ -808,9 +855,14 @@ func (q *Router) collect() {
 				}
 			}
 			q.savedTrans[id] = t
+			if extra := id - len(q.savedKeep) + 1; extra > 0 {
+				q.savedKeep = append(q.savedKeep, make([]int, extra)...)
+			}
+			q.savedKeep[id] = q.keepDepth
 		case ops.TypeLoad:
 			id := ops.DecodeLoad(encOp.Data)
 			t = q.savedTrans[id]
+			q.keepDepth = q.savedKeep[id]
 			pc.resetState()
 			pc.setTrans(t)
 
@@ -836,14 +888,24 @@ func (q *Router) collect() {
 		case ops.TypeInput:
 			tag := encOp.Refs[0].(event.Tag)
 			s := q.stateFor(tag)
+			s.kept = s.kept || q.keepDepth > 0
 			pc.inputOp(tag, &s.pointer)
 			a := pc.currentArea()
 			b := pc.currentAreaBounds()
-			if s.filter.focusable {
+			// The filter the handler routes by from this frame on.
+			f := s.nextFilter
+			if s.kept && !s.queried {
+				f = s.filter
+			}
+			if f.focusable {
 				kq.inputOp(tag, &s.key, t, a, b)
 			}
 
 		// Pointer ops.
+		case ops.TypeKeep:
+			q.keepDepth++
+		case ops.TypePopKeep:
+			q.keepDepth--
 		case ops.TypePass:
 			pc.pass()
 		case ops.TypePopPass:

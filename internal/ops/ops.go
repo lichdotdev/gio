@@ -77,6 +77,8 @@ const (
 	TypeSemanticSelected
 	TypeSemanticEnabled
 	TypeActionInput
+	TypeKeep
+	TypePopKeep
 )
 
 type StackID struct {
@@ -113,6 +115,7 @@ const (
 	TransStack
 	PassStack
 	OpacityStack
+	KeepStack
 	_StackKind
 )
 
@@ -153,6 +156,8 @@ const (
 	TypeSemanticSelectedLen = 2
 	TypeSemanticEnabledLen  = 2
 	TypeActionInputLen      = 1 + 1
+	TypeKeepLen             = 1
+	TypePopKeepLen          = 1
 )
 
 func (op *ClipOp) Decode(data []byte) {
@@ -426,6 +431,8 @@ var opProps = [0x100]opProp{
 	TypeSemanticSelected: {Size: TypeSemanticSelectedLen, NumRefs: 0},
 	TypeSemanticEnabled:  {Size: TypeSemanticEnabledLen, NumRefs: 0},
 	TypeActionInput:      {Size: TypeActionInputLen, NumRefs: 0},
+	TypeKeep:             {Size: TypeKeepLen, NumRefs: 0},
+	TypePopKeep:          {Size: TypePopKeepLen, NumRefs: 0},
 }
 
 func (t OpType) props() (size, numRefs uint32) {
@@ -491,6 +498,10 @@ func (t OpType) String() string {
 		return "Stroke"
 	case TypeSemanticLabel:
 		return "SemanticDescription"
+	case TypeKeep:
+		return "Keep"
+	case TypePopKeep:
+		return "PopKeep"
 	default:
 		panic("unknown OpType")
 	}
