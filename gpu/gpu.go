@@ -181,6 +181,11 @@ type opKey struct {
 	outline        bool
 	strokeWidth    float32
 	sx, hx, sy, hy float32
+	// hash is a path's content hash. A path is keyed by it rather than by
+	// ops.Key, which is new each frame for a path recorded into the frame's
+	// operations: keyed by place, a border drawn again unchanged is
+	// flattened, stroked and uploaded again every frame.
+	hash uint64
 	ops.Key
 }
 
@@ -1137,7 +1142,7 @@ loop:
 				break loop
 			}
 			quads.aux = encOp.Data[ops.TypeAuxLen:]
-			quads.key.Key = encOp.Key
+			quads.key.hash = quads.hash
 
 		case ops.TypeClip:
 			var op ops.ClipOp

@@ -359,3 +359,38 @@ func TestInstancedRects(t *testing.T) {
 		}
 	}, nil)
 }
+
+// TestStrokeRecordedEachFrame records the same stroke again every frame, as
+// a widget does, so it is drawn from the data a frame before built: moved,
+// and twice in one frame.
+func TestStrokeRecordedEachFrame(t *testing.T) {
+	square := func(o *op.Ops, at image.Point) {
+		defer op.Offset(at).Push(o).Pop()
+		var p clip.Path
+		p.Begin(o)
+		p.LineTo(f32.Pt(20, 0))
+		p.LineTo(f32.Pt(20, 20))
+		p.LineTo(f32.Pt(0, 20))
+		p.Close()
+		paint.FillShape(o, red, clip.Stroke{Path: p.End(), Width: 4}.Op())
+	}
+	drawn := func(r result, at image.Point) {
+		r.expect(at.X+10, at.Y, colornames.Red)
+		r.expect(at.X+20, at.Y+10, colornames.Red)
+		r.expect(at.X+10, at.Y+10, transparent)
+	}
+	a, b := image.Pt(10, 10), image.Pt(60, 60)
+	multiRun(t,
+		frame(func(o *op.Ops) { square(o, a) }, func(r result) {
+			drawn(r, a)
+			r.expect(b.X+10, b.Y, transparent)
+		}),
+		frame(func(o *op.Ops) { square(o, b) }, func(r result) {
+			drawn(r, b)
+			r.expect(a.X+10, a.Y, transparent)
+		}),
+		frame(func(o *op.Ops) { square(o, a); square(o, b) }, func(r result) {
+			drawn(r, a)
+			drawn(r, b)
+		}))
+}
