@@ -168,6 +168,19 @@ func (w *x11Window) ReadClipboard() {
 	C.XConvertSelection(w.x, w.atoms.clipboard, w.atoms.utf8string, w.atoms.clipboardContent, w.xw, C.CurrentTime)
 }
 
+// clipboardText is the UTF-8 text a clipboard read left in prop, "" when it
+// left none.
+func (w *x11Window) clipboardText(prop C.Atom) string {
+	var text C.XTextProperty
+	if st := C.XGetTextProperty(w.x, w.xw, &text, prop); st == 0 {
+		return ""
+	}
+	if text.format != 8 || text.encoding != w.atoms.utf8string {
+		return ""
+	}
+	return C.GoStringN((*C.char)(unsafe.Pointer(text.value)), C.int(text.nitems))
+}
+
 func (w *x11Window) WriteClipboard(c clipboardContent) {
 	w.clipboard = c
 	C.XSetSelectionOwner(w.x, w.atoms.clipboard, w.xw, C.CurrentTime)
@@ -776,23 +789,19 @@ func (h *x11EventHandler) handleEvents() bool {
 				w.handleXdndSelection(cevt)
 				break
 			}
+			// The owner refuses a conversion it cannot make (an image on the
+			// clipboard, say) with no property. Answer that read empty, as the
+			// other drivers do, and one whose text cannot be read too: a read
+			// left unanswered keeps its widget a receiver, and the router asks
+			// the clipboard for it no more.
 			prop := w.atoms.clipboardContent
-			if cevt.property != prop {
+			if cevt.selection != w.atoms.clipboard || (cevt.property != prop && cevt.property != C.None) {
 				break
 			}
-			if cevt.selection != w.atoms.clipboard {
-				break
+			var str string
+			if cevt.property == prop {
+				str = w.clipboardText(prop)
 			}
-			var text C.XTextProperty
-			if st := C.XGetTextProperty(w.x, w.xw, &text, prop); st == 0 {
-				// Failed; ignore.
-				break
-			}
-			if text.format != 8 || text.encoding != w.atoms.utf8string {
-				// Ignore non-utf-8 encoded strings.
-				break
-			}
-			str := C.GoStringN((*C.char)(unsafe.Pointer(text.value)), C.int(text.nitems))
 			w.ProcessEvent(transfer.DataEvent{
 				Type: "application/text",
 				Open: func() io.ReadCloser {
