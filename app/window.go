@@ -57,6 +57,9 @@ type Window struct {
 	animating    bool
 	hasNextFrame bool
 	nextFrame    time.Time
+	// refreshPending is a surface refresh that failed transiently and
+	// must be retried before the next frame draws.
+	refreshPending bool
 	// viewport is the latest frame size with insets applied.
 	viewport image.Rectangle
 	// metric is the metric from the most recent frame.
@@ -154,11 +157,15 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 				sync = true
 			}
 		}
-		if sync && w.ctx != nil {
+		if (sync || w.refreshPending) && w.ctx != nil {
 			if err := w.ctx.Refresh(); err != nil {
 				if errors.Is(err, errOutOfDate) {
-					// Surface couldn't be created for transient reasons. Skip
-					// this frame and wait for the next.
+					// Surface couldn't be created for transient reasons, as an
+					// X11 surface lagging its ConfigureNotify. The Expose that
+					// asked for this frame comes once: without another frame
+					// the window stays unpainted until the next input.
+					w.refreshPending = true
+					w.setNextFrame(time.Now().Add(refreshRetry))
 					return nil
 				}
 				w.destroyGPU()
@@ -167,6 +174,7 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 				}
 				return err
 			}
+			w.refreshPending = false
 		}
 		if w.ctx != nil {
 			if err := w.ctx.Lock(); err != nil {
@@ -409,6 +417,10 @@ func (w *Window) scheduleInvalidate(t time.Time) {
 	}
 	w.timer.update <- t
 }
+
+// refreshRetry spaces the retries of a surface refresh the window system
+// is not ready for.
+const refreshRetry = 10 * time.Millisecond
 
 func (w *Window) setNextFrame(at time.Time) {
 	if !w.hasNextFrame || at.Before(w.nextFrame) {
