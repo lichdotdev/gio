@@ -208,6 +208,10 @@ type window struct {
 		time  time.Duration
 		steps image.Point
 		dist  f32.Point
+		// wheel is whether the frame's axis events come from a wheel. A
+		// high-resolution wheel sends a fraction of a notch an event and
+		// wl_pointer.axis_discrete only on the event that completes one.
+		wheel bool
 	}
 	pointerBtns pointer.Buttons
 	lastPos     f32.Point
@@ -1235,6 +1239,10 @@ func (w *window) flushFling() {
 
 //export gio_onPointerAxisSource
 func gio_onPointerAxisSource(data unsafe.Pointer, pointer *C.struct_wl_pointer, source C.uint32_t) {
+	s := callbackLoad(data).(*wlSeat)
+	if w := s.pointerFocus; w != nil {
+		w.scroll.wheel = source == C.WL_POINTER_AXIS_SOURCE_WHEEL
+	}
 }
 
 //export gio_onPointerAxisStop
@@ -2192,18 +2200,20 @@ func (w *window) flushScroll() {
 	// The Wayland reported scroll distance for
 	// discrete scroll axes is only 10 pixels, where
 	// 100 seems more appropriate.
+	// A wheel's events are all scaled, the fractions of a high-resolution
+	// one's notch too, or most of its turn would move a tenth as far.
 	const discreteScale = 10
-	if w.scroll.steps.X != 0 {
+	if w.scroll.steps.X != 0 || w.scroll.wheel {
 		w.scroll.dist.X *= discreteScale
 	}
-	if w.scroll.steps.Y != 0 {
+	if w.scroll.steps.Y != 0 || w.scroll.wheel {
 		w.scroll.dist.Y *= discreteScale
 	}
 	total := w.scroll.dist.Add(fling)
 	if total == (f32.Point{}) {
 		return
 	}
-	if w.scroll.steps == (image.Point{}) {
+	if w.scroll.steps == (image.Point{}) && !w.scroll.wheel {
 		w.fling.xExtrapolation.SampleDelta(w.scroll.time, -w.scroll.dist.X)
 		w.fling.yExtrapolation.SampleDelta(w.scroll.time, -w.scroll.dist.Y)
 	}
@@ -2211,6 +2221,7 @@ func (w *window) flushScroll() {
 	// re-process the scroll distance.
 	w.scroll.dist = f32.Point{}
 	w.scroll.steps = image.Point{}
+	w.scroll.wheel = false
 	w.ProcessEvent(pointer.Event{
 		Kind:      pointer.Scroll,
 		Source:    pointer.Mouse,
