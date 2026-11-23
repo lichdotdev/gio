@@ -681,7 +681,11 @@ func (h *x11EventHandler) handleEvents() bool {
 				ev.Kind = pointer.Release
 			}
 			var btn pointer.Buttons
-			const scrollScale = 10
+			// scrollScale is one wheel notch, as far as a notch scrolls on Wayland
+			// (the compositor's 15 times discreteScale): at 10 a window that runs
+			// on X11, under XWayland too, scrolled 15 times slower than the same
+			// window on Wayland.
+			const scrollScale = 150
 			switch bevt.button {
 			case C.Button1:
 				btn = pointer.ButtonPrimary
