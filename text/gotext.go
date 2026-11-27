@@ -803,6 +803,9 @@ func toLine(faceToIndex map[*font.Font]int, o shaping.Line, dir system.TextDirec
 		visualOrder: make([]int, len(o)),
 	}
 	maxSize := fixed.Int26_6(0)
+	// A run that takes no room, such as a zero-width truncator shaped from a
+	// fallback face, draws nothing and must not move the line's baseline.
+	visible := slices.ContainsFunc(o, func(r shaping.Output) bool { return r.Advance != 0 })
 	for i := range o {
 		run := o[i]
 		if run.Size > maxSize {
@@ -827,6 +830,9 @@ func toLine(faceToIndex map[*font.Font]int, o shaping.Line, dir system.TextDirec
 		line.visualOrder[run.VisualIndex] = i
 		line.runeCount += run.Runes.Count
 		line.width += run.Advance
+		if visible && run.Advance == 0 {
+			continue
+		}
 		if line.ascent < run.LineBounds.Ascent {
 			line.ascent = run.LineBounds.Ascent
 		}
