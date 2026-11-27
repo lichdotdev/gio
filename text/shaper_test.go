@@ -610,3 +610,29 @@ func TestShaperReportsRunesOutsideCollection(t *testing.T) {
 		}
 	}
 }
+
+// TestInvisibleTruncatorKeepsTheBaseline checks that a zero-width truncator
+// the font lacks, shaped from a fallback face with a taller ascent, does not
+// push the truncated line's baseline below the untruncated one's.
+func TestInvisibleTruncatorKeepsTheBaseline(t *testing.T) {
+	ltrFace, _ := opentype.Parse(goregular.TTF)
+	tallFace, _ := opentype.Parse(nsareg.TTF)
+	shaper := NewShaper(NoSystemFonts(), WithCollection([]FontFace{
+		{Font: font.Font{Typeface: "Go"}, Face: ltrFace},
+		{Font: font.Font{Typeface: "Tall"}, Face: tallFace},
+	}))
+	firstY := func(maxLines, maxWidth int) int32 {
+		shaper.LayoutString(Parameters{Font: font.Font{Typeface: "Go"}, PxPerEm: fixed.I(16), MaxLines: maxLines, MaxWidth: maxWidth, Truncator: "​"}, "The quick brown fox")
+		g, ok := shaper.NextGlyph()
+		if !ok {
+			t.Fatal("no glyphs")
+		}
+		for _, ok := shaper.NextGlyph(); ok; _, ok = shaper.NextGlyph() {
+		}
+		return g.Y
+	}
+	whole, truncated := firstY(0, 10000), firstY(1, 60)
+	if truncated != whole {
+		t.Errorf("truncated line's baseline at %d, want the untruncated %d", truncated, whole)
+	}
+}
